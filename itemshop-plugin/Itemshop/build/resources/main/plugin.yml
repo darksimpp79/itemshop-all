@@ -1,0 +1,18 @@
+name: Itemshop
+version: '1.0'
+
+main: pl.ziutek.itemshop.Itemshop
+paperPluginLoader: pl.ziutek.itemshop.ItemshopLoader
+api-version: '1.21.11'
+load: POSTWORLD
+# ... (tu są nazwa, wersja, autor itp.) ...
+
+commands:
+  magazyn:
+    description: Zarzadzanie ItemShopem (odbior i przeladowanie)
+    usage: /magazyn [reload|help]
+
+permissions:
+  itemshop.admin:
+    description: Pozwala na /magazyn reload
+    default: op

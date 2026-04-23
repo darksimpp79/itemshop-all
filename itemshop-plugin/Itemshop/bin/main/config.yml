@@ -1,0 +1,19 @@
+server-name: "NazwaSerwera"
+server-mode: "Survival" # <--- NOWOŚĆ: Tutaj wpisujemy tryb serwera!
+api-key: "TUTAJ_WKLEJ_KLUCZ_Z_DASHBOARDU"
+api-url: "http://localhost:8080/api"
+check-interval: 60
+debug: false
+shop-url: "www.alicjacraft.pl"
+
+# Bezpieczeństwo: tylko komendy z tych prefiksów będą wykonane jako konsola.
+# Dodaj tu komendy z Twojego serwera/pluginów (np. luckperms, eco, give), reszta będzie blokowana.
+allowed-command-prefixes:
+  - "give "
+  - "lp "
+  - "eco "
+
+messages:
+  no-slots: "&cNie masz wystarczającej ilości wolnych slotów w ekwipunku!"
+  bought-success: "&aPomyślnie odebrano przedmiot: &f{item}"
+  nothing-to-collect: "&cObecnie nie masz żadnych przedmiotów do odebrania."
