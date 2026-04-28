@@ -1,13 +1,17 @@
 server-name: "NazwaSerwera"
-server-mode: "Survival" # <--- NOWOŚĆ: Tutaj wpisujemy tryb serwera!
+server-mode: "Survival"
 api-key: "TUTAJ_WKLEJ_KLUCZ_Z_DASHBOARDU"
 api-url: "http://localhost:8080/api"
 check-interval: 60
 debug: false
 shop-url: "www.alicjacraft.pl"
 
+# Czy ogłaszać wszystkim graczom na serwerze każdy odbiór?
+# Na większym serwerze ustaw na false — będzie mniej spamu na czacie
+broadcast-purchases: false
+
 # Bezpieczeństwo: tylko komendy z tych prefiksów będą wykonane jako konsola.
-# Dodaj tu komendy z Twojego serwera/pluginów (np. luckperms, eco, give), reszta będzie blokowana.
+# UWAGA: pusta lista = blokuj wszystko. Gwiazdka "*" = zezwalaj na wszystko (niebezpieczne!).
 allowed-command-prefixes:
   - "give "
   - "lp "

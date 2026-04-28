@@ -8,6 +8,9 @@ import java.util.List;
 
 @Repository
 public interface OrderRepository extends JpaRepository<Order, Long> {
-    // To wywoła plugin, żeby wiedzieć co wydać
-    List<Order> findByShopApiKeyAndStatus(String apiKey, String status);
+
+    // FIX: poprawna ścieżka przez relację @ManyToOne — shop.apiKey zamiast shopApiKey
+    // Poprzedni zapis "findByShopApiKeyAndStatus" powodował błąd przy starcie aplikacji
+    // bo Spring Data szukał pola 'shopApiKey' bezpośrednio w encji Order.
+    List<Order> findByShop_ApiKeyAndStatus(String apiKey, String status);
 }

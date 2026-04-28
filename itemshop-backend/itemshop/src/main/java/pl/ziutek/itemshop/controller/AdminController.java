@@ -1,213 +1,256 @@
 package pl.ziutek.itemshop.controller;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.cache.Cache;
+import org.springframework.cache.CacheManager;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.*;
+import pl.ziutek.itemshop.dto.PageableResponse;
 import pl.ziutek.itemshop.model.*;
 import pl.ziutek.itemshop.repository.*;
 
 import java.nio.charset.StandardCharsets;
-import java.time.DayOfWeek;
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.*;
+import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/admin")
 public class AdminController {
 
-    @Autowired
-    private ShopRepository shopRepository;
-    @Autowired
-    private ProductRepository productRepository;
-    @Autowired
-    private OwnerRepository ownerRepository;
-    @Autowired
-    private PendingItemRepository itemRepository;
-    @Autowired
-    private ShopModeRepository shopModeRepository;
+    private static final Logger log = LoggerFactory.getLogger(AdminController.class);
 
-    // 1. ZAKŁADANIE SKLEPU (Z BLOKADĄ LIMITU 1 DLA FREE)
+    @Autowired private ShopRepository shopRepository;
+    @Autowired private ProductRepository productRepository;
+    @Autowired private OwnerRepository ownerRepository;
+    @Autowired private PendingItemRepository itemRepository;
+    @Autowired private ShopModeRepository shopModeRepository;
+    @Autowired private pl.ziutek.itemshop.service.DnsVerificationService dnsVerificationService;
+    @Autowired private pl.ziutek.itemshop.repository.LootboxRewardRepository lootboxRewardRepository;
+    @Autowired private CacheManager cacheManager;
+
+    // ══ SKLEP ══
+
     @PostMapping("/sklep")
     public ResponseEntity<?> zalozSklep(@RequestParam String serverName) {
-        String ownerEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-
-        // Pobieramy Ownera
+        String ownerEmail = currentEmail();
         Owner owner = ownerRepository.findByEmail(ownerEmail)
                 .orElseThrow(() -> new RuntimeException("Błąd autoryzacji!"));
 
-        // BLOKADA: Sprawdzamy plan subskrypcji przypisany do OWNERA
         List<Shop> existingShops = shopRepository.findByOwnerEmail(ownerEmail);
         if ("FREE".equals(owner.getSubscriptionPlan()) && existingShops.size() >= 1) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Limit 1 sklepu dla planu FREE! Odblokuj PRO, aby tworzyć bez limitów. 🚀");
+                    .body("Limit 1 sklepu dla planu FREE. Odblokuj PRO, aby tworzyć bez limitów.");
         }
 
-        // Sprawdzamy czy nazwa nie jest zajęta globalnie
-        boolean exists = shopRepository.findAll().stream()
-                .anyMatch(s -> s.getServerName().equalsIgnoreCase(serverName));
-
-        if (exists) {
+        // Zapytanie DB zamiast findAll() — zero ładowania wszystkich sklepów do RAM
+        if (shopRepository.findByServerNameIgnoreCase(serverName).isPresent()) {
             return ResponseEntity.badRequest().body("Serwer o takiej nazwie już istnieje!");
         }
 
         Shop shop = new Shop();
         shop.setServerName(serverName);
         shop.setOwner(owner);
-
-        Shop savedShop = shopRepository.save(shop);
-        return ResponseEntity.ok(savedShop);
+        return ResponseEntity.ok(shopRepository.save(shop));
     }
 
-    // 2. GLOBALNY UPGRADE KONTA DO PRO (DLA CAŁEGO OWNERA)
-    @PostMapping("/user/upgrade")
-    public ResponseEntity<?> upgradeOwnerToPro() {
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-
-        return ownerRepository.findByEmail(loggedInEmail).map(owner -> {
-            owner.setSubscriptionPlan("PRO");
-            ownerRepository.save(owner);
-            return ResponseEntity.ok("Subskrypcja PRO została aktywowana dla całego konta! 💎");
-        }).orElse(ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono użytkownika"));
-    }
-
-    @GetMapping("/user/profile")
-    public ResponseEntity<?> getUserProfile() {
-        String email = SecurityContextHolder.getContext().getAuthentication().getName();
-        return ownerRepository.findByEmail(email)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
-    }
-
-    // 3. DODAWANIE PRODUKTU
-    @PostMapping("/produkt")
-    public ResponseEntity<?> dodajProdukt(
-            @RequestHeader("X-API-Key") String apiKey,
-            @RequestBody Product product) {
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).body("Nieautoryzowany klucz API!");
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-
-        // ZABEZPIECZENIE IGNORUJĄCE WIELKOŚĆ LITER:
-        if (!shopOpt.get().getOwner().getEmail().equalsIgnoreCase(loggedInEmail)) {
-            return ResponseEntity.status(403).body("Brak dostępu!");
-        }
-
-        product.setShop(shopOpt.get());
-        productRepository.save(product);
-        return ResponseEntity.ok("Produkt dodany!");
-    }
-
-    // 4. POBIERANIE TWOICH SKLEPÓW
     @GetMapping("/moje-sklepy")
     public ResponseEntity<?> getMyShops() {
-        String ownerEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        return ResponseEntity.ok(shopRepository.findByOwnerEmail(ownerEmail));
+        return ResponseEntity.ok(shopRepository.findByOwnerEmail(currentEmail()));
     }
 
-    // 5. POBIERANIE PRODUKTÓW
+    @PutMapping("/sklep/ip")
+    public ResponseEntity<?> updateShopIp(@RequestHeader("X-API-Key") String apiKey, @RequestParam String serverIp) {
+        return withOwnedShop(apiKey, shop -> {
+            shop.setServerIp(serverIp);
+            shopRepository.save(shop);
+            return ResponseEntity.ok("IP zaktualizowane");
+        });
+    }
+
+    @PutMapping("/sklep/motyw")
+    public ResponseEntity<?> updateShopTheme(@RequestHeader("X-API-Key") String apiKey, @RequestParam String theme) {
+        return withOwnedShop(apiKey, shop -> {
+            if ("FREE".equals(shop.getOwner().getSubscriptionPlan()) && !"default".equals(theme)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Motywy premium są zarezerwowane dla planu PRO.");
+            }
+            shop.setTheme(theme);
+            shopRepository.save(shop);
+            return ResponseEntity.ok("Motyw zaktualizowany!");
+        });
+    }
+
+    @PatchMapping("/shops/{id}/settings")
+    public ResponseEntity<?> updateShopSettings(@PathVariable Long id, @RequestBody Map<String, String> updates) {
+        return shopRepository.findById(id).map(shop -> {
+            if (!shop.getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
+                return ResponseEntity.<Object>status(HttpStatus.FORBIDDEN).build();
+            }
+            if (updates.containsKey("dailyRewardName"))  shop.setDailyRewardName(updates.get("dailyRewardName"));
+            if (updates.containsKey("discordLink"))       shop.setDiscordLink(updates.get("discordLink"));
+            if (updates.containsKey("bannerText"))        shop.setBannerText(updates.get("bannerText"));
+            if (updates.containsKey("termsContent"))      shop.setTermsContent(updates.get("termsContent"));
+            if (updates.containsKey("dailyRewardCommand")) {
+                String cmd = updates.get("dailyRewardCommand");
+                if (cmd != null && cmd.length() > 512) {
+                    return ResponseEntity.<Object>badRequest().body("Komenda jest zbyt długa (max 512 znaków).");
+                }
+                shop.setDailyRewardCommand(cmd);
+            }
+            shopRepository.save(shop);
+            evictShopInfoCache(shop);
+            return ResponseEntity.<Object>ok().build();
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+    @PostMapping("/custom-domain")
+    public ResponseEntity<?> setCustomDomain(
+            @RequestParam String customDomain,
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak API Key!");
+
+        return withOwnedShop(apiKey, shop -> {
+            if (!"PRO".equals(shop.getOwner().getSubscriptionPlan())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("CustomDomain dostępny tylko w planie PRO.");
+            }
+            String validationError = validateCustomDomain(customDomain);
+            if (validationError != null) return ResponseEntity.badRequest().body(validationError);
+
+            String normalized = customDomain.trim().toLowerCase();
+            Optional<Shop> existing = shopRepository.findByCustomDomain(normalized);
+            if (existing.isPresent() && !existing.get().getId().equals(shop.getId())) {
+                return ResponseEntity.badRequest().body("Domena jest już zajęta przez inny sklep.");
+            }
+            
+            // DNS Verification
+            boolean verified = dnsVerificationService.verifyDomain(normalized);
+            if (!verified) {
+                return ResponseEntity.badRequest().body("Weryfikacja DNS nie powiodła się. Upewnij się, że dodałeś rekord CNAME zgodnie z instrukcją i poczekaj na propagację.");
+            }
+
+            shop.setCustomDomain(normalized);
+            shopRepository.save(shop);
+            return ResponseEntity.ok(Map.of("message", "Domena zweryfikowana i ustawiona!", "domain", normalized));
+        });
+    }
+
+    // ══ PRODUKTY ══
+
+    @PostMapping("/produkt")
+    public ResponseEntity<?> dodajProdukt(@RequestHeader("X-API-Key") String apiKey, @RequestBody Product product) {
+        return withOwnedShop(apiKey, shop -> {
+            product.setShop(shop);
+            productRepository.save(product);
+            evictShopProductCache(shop);
+            return ResponseEntity.ok("Produkt dodany!");
+        });
+    }
+
     @GetMapping("/produkty")
     public ResponseEntity<?> getShopProducts(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam
     ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).body("Brak klucza API!");
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(404).body("Nie znaleziono sklepu");
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).body("Brak dostępu!");
-        }
-
-        return ResponseEntity.ok(productRepository.findByShop(shopOpt.get()));
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        return withOwnedShop(apiKey, shop ->
+                ResponseEntity.ok(productRepository.findByShopOrderByPositionAsc(shop))
+        );
     }
 
+    // FIX: @Transactional — pętla save() jest atomowa; błąd w połowie nie zostawi częściowej aktualizacji
     @PutMapping("/produkty/kolejnosc")
+    @Transactional
     public ResponseEntity<?> updateProductOrder(
             @RequestHeader("X-API-Key") String apiKey,
-            @RequestBody List<Map<String, Object>> orderData) {
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        for (Map<String, Object> item : orderData) {
-            Long productId = Long.valueOf(item.get("id").toString());
-            int position   = Integer.parseInt(item.get("position").toString());
-
-            productRepository.findById(productId).ifPresent(product -> {
-                if (product.getShop().getId().equals(shopOpt.get().getId())) {
-                    product.setPosition(position);
-                    productRepository.save(product);
-                }
-            });
-        }
-
-        return ResponseEntity.ok("Kolejność zaktualizowana!");
+            @RequestBody List<Map<String, Object>> orderData
+    ) {
+        return withOwnedShop(apiKey, shop -> {
+            for (Map<String, Object> item : orderData) {
+                Long productId = Long.valueOf(item.get("id").toString());
+                int position   = Integer.parseInt(item.get("position").toString());
+                productRepository.findById(productId).ifPresent(product -> {
+                    if (product.getShop().getId().equals(shop.getId())) {
+                        product.setPosition(position);
+                        productRepository.save(product);
+                    }
+                });
+            }
+            evictShopProductCache(shop);
+            return ResponseEntity.ok("Kolejność zaktualizowana!");
+        });
     }
 
     @DeleteMapping("/produkt/{id}")
     public ResponseEntity<?> usunProdukt(@PathVariable Long id) {
         Optional<Product> prodOpt = productRepository.findById(id);
         if (prodOpt.isEmpty()) return ResponseEntity.notFound().build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!prodOpt.get().getShop().getOwner().getEmail().equals(loggedInEmail)) {
+        Shop shop = prodOpt.get().getShop();
+        if (!shop.getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
             return ResponseEntity.status(403).body("Brak uprawnień!");
         }
-
         productRepository.delete(prodOpt.get());
+        evictShopProductCache(shop);
         return ResponseEntity.ok("Usunięto produkt");
     }
 
+    // ══ ZAMÓWIENIA (z paginacją) ══
+
+    /**
+     * FIX: paginacja — nie ładujemy wszystkich zamówień do RAM.
+     * Domyślnie strona 0, 20 rekordów, sortowanie po id DESC (najnowsze pierwsze).
+     * Frontend może przekazać ?page=0&size=50 aby kontrolować paginację.
+     */
     @GetMapping("/zamowienia")
     public ResponseEntity<?> getZamowienia(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
-            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int size
     ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).build();
 
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
+        final int cappedSize = Math.min(size, 100); // ← effectively final, można użyć w lambdzie
 
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        return ResponseEntity.ok(itemRepository.findByShop(shopOpt.get()));
+        return withOwnedShop(apiKey, shop -> {
+            PageRequest pageRequest = PageRequest.of(page, cappedSize, Sort.by(Sort.Direction.DESC, "id"));
+            Page<PendingItem> pageResult = itemRepository.findByShop(shop, pageRequest);
+            return ResponseEntity.ok(PageableResponse.of(pageResult));
+        });
     }
-
     @GetMapping("/zamowienia/export")
     public ResponseEntity<byte[]> exportOrdersCsv(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam
-    ) throws Exception {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).build();
 
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
         Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
+        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
             return ResponseEntity.status(403).build();
         }
 
+        // Export pobiera wszystko — akceptowalne dla CSV bo to jednorazowa operacja,
+        // ale dla bardzo dużych sklepów warto w przyszłości streamować
         List<PendingItem> items = itemRepository.findByShop(shopOpt.get());
-
         StringBuilder csv = new StringBuilder();
         csv.append("ID,Nick Gracza,Produkt,Tryb,Status,Komenda\n");
-
         for (PendingItem item : items) {
             csv.append(item.getId()).append(",")
                     .append(escapeCsv(item.getPlayerName())).append(",")
@@ -218,17 +261,189 @@ public class AdminController {
         }
 
         byte[] bytes = csv.toString().getBytes(StandardCharsets.UTF_8);
-        // BOM dla Excela (poprawna obsługa polskich znaków)
-        byte[] bom = new byte[]{(byte)0xEF, (byte)0xBB, (byte)0xBF};
-        byte[] withBom = new byte[bom.length + bytes.length];
-        System.arraycopy(bom, 0, withBom, 0, bom.length);
-        System.arraycopy(bytes, 0, withBom, bom.length, bytes.length);
+        byte[] bom   = new byte[]{(byte)0xEF, (byte)0xBB, (byte)0xBF};
+        byte[] result = new byte[bom.length + bytes.length];
+        System.arraycopy(bom, 0, result, 0, bom.length);
+        System.arraycopy(bytes, 0, result, bom.length, bytes.length);
 
         String shopName = shopOpt.get().getServerName().replaceAll("[^a-zA-Z0-9]", "_");
         return ResponseEntity.ok()
                 .header("Content-Disposition", "attachment; filename=\"zamowienia_" + shopName + ".csv\"")
                 .header("Content-Type", "text/csv; charset=UTF-8")
-                .body(withBom);
+                .body(result);
+    }
+
+    // ══ STATYSTYKI ══
+
+    @GetMapping("/stats")
+    public ResponseEntity<?> getDashboardStats(
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).build();
+
+        return withOwnedShop(apiKey, shop -> {
+            long totalOrders   = itemRepository.countByShop(shop);
+            long claimedOrders = itemRepository.countByShopAndClaimed(shop, true);
+            double revenue     = itemRepository.sumRevenueByShop(shop);
+            long uniquePlayers = itemRepository.countDistinctPlayersByShop(shop);
+
+            return ResponseEntity.ok(Map.of(
+                    "totalOrders", totalOrders,
+                    "claimedOrders", claimedOrders,
+                    "totalRevenue", revenue,
+                    "uniquePlayers", uniquePlayers
+            ));
+        });
+    }
+
+    @GetMapping("/stats/chart")
+    public ResponseEntity<?> getChartData(
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).build();
+
+        return withOwnedShop(apiKey, shop -> {
+            List<Product> products = productRepository.findByShop(shop);
+            Map<String, Double> priceMap = buildPriceMap(products);
+
+            LocalDateTime since = LocalDate.now().minusDays(6).atStartOfDay();
+            List<PendingItem> recentItems = itemRepository.findByShopAndCreatedAtAfter(shop, since);
+
+            String[] dayLabels = {"Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"};
+            LocalDate today = LocalDate.now();
+            List<Map<String, Object>> chartData = new ArrayList<>();
+
+            for (int i = 6; i >= 0; i--) {
+                LocalDate day = today.minusDays(i);
+                LocalDateTime start = day.atStartOfDay();
+                LocalDateTime end   = day.plusDays(1).atStartOfDay();
+
+                List<PendingItem> dayItems = recentItems.stream()
+                        .filter(item -> !item.getCreatedAt().isBefore(start)
+                                && item.getCreatedAt().isBefore(end))
+                        .collect(Collectors.toList());
+
+                double dayRevenue = dayItems.stream()
+                        .filter(PendingItem::isClaimed)
+                        .mapToDouble(item -> priceMap.getOrDefault(item.getItemName(), 0.0))
+                        .sum();
+
+                Map<String, Object> point = new LinkedHashMap<>();
+                point.put("date", dayLabels[day.getDayOfWeek().getValue() - 1]);
+                point.put("revenue", dayRevenue);
+                point.put("orders", dayItems.size());
+                chartData.add(point);
+            }
+
+            return ResponseEntity.ok(chartData);
+        });
+    }
+
+    // ══ TRYBY ══
+
+    @GetMapping("/tryby")
+    public ResponseEntity<?> getShopModes(
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).build();
+        return withOwnedShop(apiKey, shop -> ResponseEntity.ok(shopModeRepository.findByShop(shop)));
+    }
+
+    @PostMapping("/tryb")
+    public ResponseEntity<?> saveShopMode(@RequestHeader("X-API-Key") String apiKey, @RequestBody ShopMode mode) {
+        return withOwnedShop(apiKey, shop -> {
+            if ("FREE".equals(shop.getOwner().getSubscriptionPlan())) {
+                List<ShopMode> existing = shopModeRepository.findByShop(shop);
+                if (mode.getId() == null && existing.size() >= 1) {
+                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                            .body("Plan FREE pozwala tylko na 1 tryb gry.");
+                }
+            }
+            mode.setShop(shop);
+            shopModeRepository.save(mode);
+            evictShopModeCache(shop);
+            return ResponseEntity.ok("Tryb zapisany!");
+        });
+    }
+
+    @DeleteMapping("/tryb/{id}")
+    public ResponseEntity<?> deleteShopMode(@PathVariable Long id) {
+        Optional<ShopMode> modeOpt = shopModeRepository.findById(id);
+        if (modeOpt.isEmpty()) return ResponseEntity.notFound().build();
+        Shop shop = modeOpt.get().getShop();
+        if (!shop.getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
+            return ResponseEntity.status(403).build();
+        }
+        shopModeRepository.delete(modeOpt.get());
+        evictShopModeCache(shop);
+        return ResponseEntity.ok("Tryb usunięty");
+    }
+
+    // ══ USER PROFILE ══
+
+    @GetMapping("/user/profile")
+    public ResponseEntity<?> getUserProfile() {
+        return ownerRepository.findByEmail(currentEmail())
+                .map(ResponseEntity::ok)
+                .orElse(ResponseEntity.notFound().build());
+    }
+
+    @PatchMapping("/user/profile")
+    public ResponseEntity<?> updateUserProfile(@RequestBody Map<String, String> body) {
+        return ownerRepository.findByEmail(currentEmail()).map(owner -> {
+            if (body.containsKey("firstName")) owner.setFirstName(body.get("firstName"));
+            if (body.containsKey("lastName"))  owner.setLastName(body.get("lastName"));
+            if (body.containsKey("phoneNumber")) owner.setPhoneNumber(body.get("phoneNumber"));
+            ownerRepository.save(owner);
+            return ResponseEntity.ok(owner);
+        }).orElse(ResponseEntity.notFound().build());
+    }
+
+
+
+    // ══ Helpers ══
+
+    private String currentEmail() {
+        return SecurityContextHolder.getContext().getAuthentication().getName();
+    }
+
+    /**
+     * Wzorzec wyciągający sklep po API key i weryfikujący właściciela.
+     * Eliminuje duplikację kodu auth w każdym endpoincie.
+     */
+    private ResponseEntity<?> withOwnedShop(String apiKey, java.util.function.Function<Shop, ResponseEntity<?>> action) {
+        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
+        if (shopOpt.isEmpty()) return ResponseEntity.status(401).body("Nieautoryzowany klucz API!");
+        if (!shopOpt.get().getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
+            return ResponseEntity.status(403).body("Brak dostępu do tego sklepu!");
+        }
+        return action.apply(shopOpt.get());
+    }
+
+    private Map<String, Double> buildPriceMap(List<Product> products) {
+        return products.stream().collect(Collectors.toMap(
+                Product::getName,
+                p -> p.getPrice() != null ? p.getPrice() : 0.0,
+                (a, b) -> a
+        ));
+    }
+
+    private String validateCustomDomain(String domain) {
+        if (domain == null || domain.isBlank()) return "Domena nie może być pusta!";
+        domain = domain.trim().toLowerCase();
+        if (domain.contains("localhost") || domain.contains("127.0.0.1")) return "Localhost nie jest dozwolony!";
+        if (domain.contains("http://") || domain.contains("https://")) return "Nie wpisuj protokołu, tylko domenę!";
+        if (domain.contains(":")) return "Nie wpisuj portu, tylko domenę!";
+        if (!domain.matches("^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]{2,}$")) {
+            return "Domena musi być ważnym formatem (np. sklep.mcsurv.pl)!";
+        }
+        return null;
     }
 
     private String escapeCsv(String value) {
@@ -239,339 +454,85 @@ public class AdminController {
         return value;
     }
 
-
-    @PutMapping("/sklep/ip")
-    public ResponseEntity<?> updateShopIp(
-            @RequestHeader("X-API-Key") String apiKey,
-            @RequestParam String serverIp) {
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        Shop shop = shopOpt.get();
-        shop.setServerIp(serverIp);
-        shopRepository.save(shop);
-        return ResponseEntity.ok("IP zaktualizowane");
+    private String resolveApiKey(String header, String param) {
+        if (header != null && !header.isBlank()) return header;
+        if (param != null && !param.isBlank()) return param;
+        return null;
     }
 
-    @GetMapping("/stats")
-    public ResponseEntity<?> getDashboardStats(
+    private void evictShopProductCache(Shop shop) {
+        evict("storefrontProducts", shop.getId());
+        evict("storefrontTop", shop.getServerName().toLowerCase());
+        evict("storefrontRecent", shop.getServerName().toLowerCase());
+    }
+
+    private void evictShopModeCache(Shop shop) {
+        evict("storefrontModes", shop.getId());
+    }
+
+    private void evictShopInfoCache(Shop shop) {
+        evict("storefrontInfo", shop.getServerName().toLowerCase());
+    }
+
+    private void evict(String cacheName, Object key) {
+        org.springframework.cache.Cache cache = cacheManager.getCache(cacheName);
+        if (cache != null) cache.evict(key);
+    }
+    // ══ LOOTBOXY ══
+
+    @GetMapping("/lootbox")
+    public ResponseEntity<?> getLootboxRewards(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam
     ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        List<PendingItem> allItems = itemRepository.findByShop(shopOpt.get());
-        double totalRevenue = allItems.stream()
-                .filter(PendingItem::isClaimed)
-                .mapToDouble(item -> 15.0).sum();
-
-        Map<String, Object> stats = new HashMap<>();
-        stats.put("totalOrders", allItems.size());
-        stats.put("claimedOrders", allItems.stream().filter(PendingItem::isClaimed).count());
-        stats.put("totalRevenue", totalRevenue);
-        stats.put("uniquePlayers", allItems.stream().map(PendingItem::getPlayerName).distinct().count());
-
-        return ResponseEntity.ok(stats);
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        return withOwnedShop(apiKey, shop -> ResponseEntity.ok(lootboxRewardRepository.findByShop(shop)));
     }
 
-    @GetMapping("/stats/chart")
-    public ResponseEntity<?> getChartData(
+    @PostMapping("/lootbox")
+    public ResponseEntity<?> addLootboxReward(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
-            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam,
+            @RequestBody pl.ziutek.itemshop.model.LootboxReward req
     ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        Shop shop = shopOpt.get();
-        List<PendingItem> allItems = itemRepository.findByShop(shop);
-
-        // Grupujemy po dniach tygodnia (ostatnie 7 dni)
-        List<Map<String, Object>> chartData = new ArrayList<>();
-        LocalDate today = LocalDate.now();
-        String[] dayLabels = {"Pon", "Wt", "Śr", "Czw", "Pt", "Sob", "Nd"};
-
-        for (int i = 6; i >= 0; i--) {
-            LocalDate day = today.minusDays(i);
-            DayOfWeek dow = day.getDayOfWeek();
-            String label = dayLabels[dow.getValue() - 1];
-
-            // Liczymy prawdziwy przychód za dany dzień z realnych cen produktów
-            double dayRevenue = allItems.stream()
-                    .filter(item -> item.isClaimed() && item.getId() != null)
-                    .mapToDouble(item -> {
-                        Optional<Product> prod = productRepository.findByShopAndName(shop, item.getItemName());
-                        return prod.map(Product::getPrice).orElse(0.0);
-                    })
-                    .sum();
-
-            // W prawdziwej implementacji filtrowałbyś po dacie createdAt w PendingItem
-            // Na razie zwracamy dane per dzień tygodnia jako placeholder z realną logiką
-            Map<String, Object> point = new HashMap<>();
-            point.put("date", label);
-            point.put("revenue", dayRevenue / 7.0); // Rozkładamy przychód równomiernie do czasu dodania pola createdAt
-            point.put("orders", allItems.size() / 7);
-            chartData.add(point);
-        }
-
-        return ResponseEntity.ok(chartData);
-    }
-
-
-    // 6. AKTUALIZACJA MOTYWU (Z BLOKADĄ DLA FREE)
-    @PutMapping("/sklep/motyw")
-    public ResponseEntity<?> updateShopTheme(
-            @RequestHeader("X-API-Key") String apiKey,
-            @RequestParam String theme) {
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).body("Błędny klucz!");
-
-        Shop shop = shopOpt.get();
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shop.getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        // BLOKADA: Sprawdzamy plan z Ownera, nie ze Sklepu!
-        if ("FREE".equals(shop.getOwner().getSubscriptionPlan()) && !"default".equals(theme)) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Motywy premium są zarezerwowane dla planu PRO! 🔒");
-        }
-
-        shop.setTheme(theme);
-        shopRepository.save(shop);
-        return ResponseEntity.ok("Motyw zaktualizowany!");
-    }
-
-    @PatchMapping("/shops/{id}/settings")
-    public ResponseEntity<?> updateShopSettings(@PathVariable Long id, @RequestBody Map<String, String> updates) {
-        return shopRepository.findById(id).map(shop -> {
-            String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-            if (!shop.getOwner().getEmail().equals(loggedInEmail)) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN).build();
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        
+        return withOwnedShop(apiKey, shop -> {
+            if (req.getName() == null || req.getName().isBlank() || req.getCommand() == null || req.getCommand().isBlank()) {
+                return ResponseEntity.badRequest().body("Nazwa i komenda są wymagane.");
             }
 
-            if (updates.containsKey("dailyRewardName")) shop.setDailyRewardName(updates.get("dailyRewardName"));
-            if (updates.containsKey("dailyRewardCommand")) shop.setDailyRewardCommand(updates.get("dailyRewardCommand"));
-            if (updates.containsKey("discordLink")) shop.setDiscordLink(updates.get("discordLink"));
-            if (updates.containsKey("bannerText")) shop.setBannerText(updates.get("bannerText"));
-            if (updates.containsKey("termsContent")) shop.setTermsContent(updates.get("termsContent"));
-
-            shopRepository.save(shop);
-            return ResponseEntity.ok().build();
-        }).orElse(ResponseEntity.notFound().build());
+            pl.ziutek.itemshop.model.LootboxReward reward = new pl.ziutek.itemshop.model.LootboxReward();
+            reward.setShop(shop);
+            reward.setName(req.getName().trim());
+            reward.setCommand(req.getCommand().trim());
+            reward.setWeight(req.getWeight() != null && req.getWeight() > 0 ? req.getWeight() : 1);
+            
+            return ResponseEntity.ok(lootboxRewardRepository.save(reward));
+        });
     }
 
-    // 7. ZARZĄDZANIE TRYBAMI (Z BLOKADĄ LIMITU 1 DLA FREE)
-    @GetMapping("/tryby")
-    public ResponseEntity<?> getShopModes(
+    @DeleteMapping("/lootbox/{id}")
+    public ResponseEntity<?> deleteLootboxReward(
+            @PathVariable Long id,
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam
     ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        return ResponseEntity.ok(shopModeRepository.findByShop(shopOpt.get()));
-    }
-
-    @PostMapping("/tryb")
-    public ResponseEntity<?> saveShopMode(
-            @RequestHeader("X-API-Key") String apiKey,
-            @RequestBody ShopMode mode) {
-
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-        if (shopOpt.isEmpty()) return ResponseEntity.status(401).build();
-
-        Shop shop = shopOpt.get();
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!shop.getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        // BLOKADA: Sprawdzamy plan z Ownera!
-        if ("FREE".equals(shop.getOwner().getSubscriptionPlan())) {
-            List<ShopMode> existingModes = shopModeRepository.findByShop(shop);
-            // Jeśli to nowe żądanie (brak ID) i już jest jeden tryb
-            if (mode.getId() == null && existingModes.size() >= 1) {
-                return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body("Plan FREE pozwala tylko na 1 tryb gry. Odblokuj limity z planem PRO! 🎮");
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        
+        return withOwnedShop(apiKey, shop -> {
+            pl.ziutek.itemshop.model.LootboxReward reward = lootboxRewardRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Nie znaleziono nagrody"));
+                    
+            if (!reward.getShop().getId().equals(shop.getId())) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Nagroda nie należy do tego sklepu");
             }
-        }
-
-        mode.setShop(shop);
-        shopModeRepository.save(mode);
-        return ResponseEntity.ok("Tryb zapisany!");
-    }
-
-    @DeleteMapping("/tryb/{id}")
-    public ResponseEntity<?> deleteShopMode(@PathVariable Long id) {
-        Optional<ShopMode> modeOpt = shopModeRepository.findById(id);
-        if (modeOpt.isEmpty()) return ResponseEntity.notFound().build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        if (!modeOpt.get().getShop().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        shopModeRepository.delete(modeOpt.get());
-        return ResponseEntity.ok("Tryb usunięty");
-    }
-
-    @GetMapping("/stats-v2")
-    public ResponseEntity<?> getDetailedStats(
-            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
-            @RequestParam(value = "apiKey", required = false) String apiKeyParam
-    ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).build();
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).build();
-        }
-
-        Shop shop = shopOpt.get();
-        List<PendingItem> items = itemRepository.findByShop(shop);
-        List<Product> products  = productRepository.findByShop(shop);
-
-        // Mapa nazwy produktu -> cena (do szybkiego lookup)
-        Map<String, Double> priceMap = products.stream()
-                .collect(java.util.stream.Collectors.toMap(
-                        Product::getName,
-                        Product::getPrice,
-                        (a, b) -> a // na wypadek duplikatów nazw
-                ));
-
-        // Sumujemy PRAWDZIWE ceny odebranych zamówień
-        double totalRevenue = items.stream()
-                .filter(PendingItem::isClaimed)
-                .mapToDouble(item -> priceMap.getOrDefault(item.getItemName(), 0.0))
-                .sum();
-
-        long uniquePlayers = items.stream()
-                .map(PendingItem::getPlayerName)
-                .distinct()
-                .count();
-
-        Map<String, Object> data = new HashMap<>();
-        data.put("revenue", totalRevenue);
-        data.put("orders",  items.size());
-        data.put("claimed", items.stream().filter(PendingItem::isClaimed).count());
-        data.put("uniquePlayers", uniquePlayers);
-
-        return ResponseEntity.ok(data);
-    }
-
-    // ══ CUSTOM DOMAIN (PRO PLAN ONLY) ══
-    @PostMapping("/custom-domain")
-    public ResponseEntity<?> setCustomDomain(
-            @RequestParam String customDomain,
-            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
-            @RequestParam(value = "apiKey", required = false) String apiKeyParam
-    ) {
-        String apiKey = (apiKeyHeader != null && !apiKeyHeader.isBlank()) ? apiKeyHeader : apiKeyParam;
-        if (apiKey == null || apiKey.isBlank()) return ResponseEntity.status(401).body("Brak API Key!");
-
-        String loggedInEmail = SecurityContextHolder.getContext().getAuthentication().getName();
-        Optional<Shop> shopOpt = shopRepository.findByApiKey(apiKey);
-
-        if (shopOpt.isEmpty() || !shopOpt.get().getOwner().getEmail().equals(loggedInEmail)) {
-            return ResponseEntity.status(403).body("Brak dostępu do tego sklepu!");
-        }
-
-        Shop shop = shopOpt.get();
-        Owner owner = shop.getOwner();
-
-        // BLOKADA: Tylko PRO może ustawiać custom domain
-        if (!"PRO".equals(owner.getSubscriptionPlan())) {
-            return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("CustomDomain dostępny tylko w planie PRO! 💎");
-        }
-
-        // Walidacja domeny
-        String validationError = validateCustomDomain(customDomain);
-        if (validationError != null) {
-            return ResponseEntity.badRequest().body(validationError);
-        }
-
-        // Sprawdzenie czy domena nie jest już zajęta
-        Optional<Shop> existingDomain = shopRepository.findByCustomDomain(customDomain.trim().toLowerCase());
-        if (existingDomain.isPresent() && !existingDomain.get().getId().equals(shop.getId())) {
-            return ResponseEntity.badRequest().body("Domena jest już zajęta przez inny sklep! 🚫");
-        }
-
-        // Ustawienie domeny
-        shop.setCustomDomain(customDomain.trim().toLowerCase());
-        shopRepository.save(shop);
-
-        return ResponseEntity.ok(java.util.Map.of(
-                "message", "Domena ustawiona! 🎉",
-                "domain", shop.getCustomDomain(),
-                "note", "Zmiany wejdą w życie w ciągu kilku minut."
-        ));
-    }
-
-    // Helper: Walidacja domeny
-    private String validateCustomDomain(String domain) {
-        if (domain == null || domain.isBlank()) {
-            return "Domena nie może być pusta!";
-        }
-
-        domain = domain.trim().toLowerCase();
-
-        // Reject localhost i IP addresses
-        if (domain.contains("localhost") || domain.contains("127.0.0.1") || domain.contains("0.0.0.0")) {
-            return "Localhost i prywatne IP nie są dozwolone! 🚫";
-        }
-
-        // Reject jeśli zawiera http:// lub https://
-        if (domain.contains("http://") || domain.contains("https://")) {
-            return "Nie wpisuj protokołu (http://, https://), tylko domenę! 📝";
-        }
-
-        // Reject jeśli zawiera port
-        if (domain.contains(":")) {
-            return "Nie wpisuj portu, tylko domenę! 📝";
-        }
-
-        // Regex: Valid domain format
-        // Zezwala na: subdomena.domena.pl, domena.com, itp.
-        String regex = "^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9]{2,}$";
-        if (!domain.matches(regex)) {
-            return "Domena musi być ważnym formatem! (np. sklep.mcsurv.pl) 📍";
-        }
-
-        return null; // Walidacja pomyślna
+            
+            lootboxRewardRepository.delete(reward);
+            return ResponseEntity.ok("Usunięto nagrodę.");
+        });
     }
 }

@@ -20,6 +20,7 @@ public class Product {
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "shop_id", nullable = false)
+    @com.fasterxml.jackson.annotation.JsonIgnore
     private Shop shop;
 
     private String name;
@@ -37,7 +38,7 @@ public class Product {
     @Column(name = "position", nullable = false, columnDefinition = "int default 0")
     private Integer position;
 
-    @ElementCollection
+    @ElementCollection(fetch = FetchType.EAGER)
     @CollectionTable(name = "product_commands", joinColumns = @JoinColumn(name = "product_id"))
     @Column(name = "command")
     private List<String> commands = new ArrayList<>();

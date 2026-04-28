@@ -56,9 +56,10 @@ public class StorefrontService {
         );
     }
 
+    // FIX: sortujemy po position, żeby kolejność produktów była deterministyczna
     @Cacheable(cacheNames = "storefrontProducts", key = "#shop.id")
     public List<Product> getProductsForShop(Shop shop) {
-        return productRepository.findByShop(shop);
+        return productRepository.findByShopOrderByPositionAsc(shop);
     }
 
     @Cacheable(cacheNames = "storefrontModes", key = "#shop.id")
@@ -77,18 +78,18 @@ public class StorefrontService {
                 .collect(Collectors.toList());
     }
 
+    // FIX: pobieramy 5 z bazy (nie 10), bez zbędnego distinct+limit w pamięci.
+    // RecentPurchaseDTO jest rekordem — distinct() działał poprawnie, ale logika była odwrócona:
+    // powinniśmy ograniczyć zapytanie na poziomie DB, a nie ładować 10 i przycinać do 5.
     @Cacheable(cacheNames = "storefrontRecent", key = "#serverName.toLowerCase()")
     public List<StorefrontController.RecentPurchaseDTO> getRecentPurchases(String serverName) {
-        List<PendingItem> recent = itemRepository.findRecentPurchases(serverName, PageRequest.of(0, 10));
+        List<PendingItem> recent = itemRepository.findRecentPurchases(serverName, PageRequest.of(0, 5));
         return recent.stream()
                 .map(item -> new StorefrontController.RecentPurchaseDTO(
                         item.getPlayerName(),
                         item.getItemName(),
                         "Przed chwilą"
                 ))
-                .distinct()
-                .limit(5)
                 .collect(Collectors.toList());
     }
 }
-

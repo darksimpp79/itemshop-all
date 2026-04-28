@@ -10,12 +10,10 @@ import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
-import pl.ziutek.itemshop.model.Owner;
-import pl.ziutek.itemshop.repository.OwnerRepository;
+import pl.ziutek.itemshop.repository.BlacklistedTokenRepository;
 
 import java.io.IOException;
 import java.util.List;
-import java.util.Optional;
 
 @Component
 public class JwtFilter extends OncePerRequestFilter {
@@ -24,39 +22,52 @@ public class JwtFilter extends OncePerRequestFilter {
     private JwtUtil jwtUtil;
 
     @Autowired
-    private OwnerRepository ownerRepository;
+    private BlacklistedTokenRepository blacklistedTokenRepository;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain chain)
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain chain)
             throws ServletException, IOException {
 
-        // Wyciągamy nagłówek "Authorization"
         final String authHeader = request.getHeader("Authorization");
 
-        // Sprawdzamy czy ma format "Bearer <token>"
         if (authHeader != null && authHeader.startsWith("Bearer ")) {
             String token = authHeader.substring(7);
 
-            // Ochroniarz sprawdza autentyczność kryptograficzną!
-            if (jwtUtil.isTokenValid(token)) {
-                String email = jwtUtil.extractEmail(token);
+            if (jwtUtil.isTokenValid(token) && !jwtUtil.isPre2faToken(token)) {
 
-                Optional<Owner> ownerOpt = ownerRepository.findByEmail(email);
-                if (ownerOpt.isPresent()) {
-                    String role = ownerOpt.get().getRole();
-                    String authority = "ROLE_" + ((role == null || role.isBlank()) ? "USER" : role.trim().toUpperCase());
-
-                    UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                            email,
-                            null,
-                            List.of(new SimpleGrantedAuthority(authority))
-                    );
-
-                    SecurityContextHolder.getContext().setAuthentication(authToken);
+                // Sprawdzamy czy token nie został unieważniony (logout)
+                String jti = extractJtiSafe(token);
+                if (jti != null && blacklistedTokenRepository.existsByJti(jti)) {
+                    // Token na blackliście — traktujemy jak brak tokenu (nie 401, żeby nie ujawniać info)
+                    chain.doFilter(request, response);
+                    return;
                 }
+
+                String email = jwtUtil.extractEmail(token);
+                String role  = jwtUtil.extractRole(token);
+
+                String authority = "ROLE_" + ((role == null || role.isBlank()) ? "USER" : role.trim().toUpperCase());
+
+                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                        email,
+                        null,
+                        List.of(new SimpleGrantedAuthority(authority))
+                );
+
+                SecurityContextHolder.getContext().setAuthentication(authToken);
             }
         }
-        // Niezależnie od wyniku, puszczamy żądanie dalej (jak nie ma tokenu, Spring i tak go zablokuje sam)
+
         chain.doFilter(request, response);
+    }
+
+    private String extractJtiSafe(String token) {
+        try {
+            return jwtUtil.extractJti(token);
+        } catch (Exception e) {
+            return null;
+        }
     }
 }

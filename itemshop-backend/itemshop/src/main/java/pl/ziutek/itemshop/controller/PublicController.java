@@ -3,17 +3,11 @@ package pl.ziutek.itemshop.controller;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-import pl.ziutek.itemshop.repository.*;
+import pl.ziutek.itemshop.repository.PendingItemRepository;
+import pl.ziutek.itemshop.repository.ShopRepository;
 
 import java.util.HashMap;
 import java.util.Map;
-
-// ════════════════════════════════════════════════════════════════════════════
-// NOWY PLIK: PublicController.java
-// Endpoint publiczny – bez autoryzacji – dla landing page
-// SecurityConfig już ma: .requestMatchers("/api/public/**").permitAll()
-// DODAJ TĘ LINIĘ DO SecurityConfig.java w sekcji authorizeHttpRequests!
-// ════════════════════════════════════════════════════════════════════════════
 
 @RestController
 @RequestMapping("/api/public")
@@ -25,31 +19,18 @@ public class PublicController {
     @Autowired
     private PendingItemRepository itemRepository;
 
-    @Autowired
-    private ProductRepository productRepository;
-
     // GET /api/public/stats
-    // Zwraca ogólne statystyki platformy dla landing page
-    // Nie ujawnia żadnych wrażliwych danych
     @GetMapping("/stats")
     public ResponseEntity<Map<String, Object>> getPlatformStats() {
         Map<String, Object> stats = new HashMap<>();
 
-        // Liczba aktywnych sklepów
         stats.put("totalShops", shopRepository.count());
-
-        // Liczba wszystkich zamówień w platformie
         stats.put("totalOrders", itemRepository.count());
 
-        // Suma przychodów (tylko zrealizowane) – bez wrażliwych danych per-sklep
-        double totalRevenue = productRepository.findAll().stream()
-                .mapToDouble(p -> 0) // placeholder – docelowo z transakcji
-                .sum();
-        // Użyjemy count * średnia jako przybliżenie
-        long claimedCount = itemRepository.findAll().stream()
-                .filter(item -> item.isClaimed())
-                .count();
-        stats.put("totalRevenue", claimedCount * 20.0); // ~20 PLN średnia
+        // FIX: usunięto hardcoded "* 20.0" — nie znamy prawdziwych cen na poziomie tego endpointu.
+        // Zwracamy liczbę zrealizowanych zamówień; frontend może wyświetlić tę wartość bez fałszywej kwoty.
+        long claimedCount = itemRepository.countByClaimed(true);
+        stats.put("claimedOrders", claimedCount);
 
         return ResponseEntity.ok(stats);
     }

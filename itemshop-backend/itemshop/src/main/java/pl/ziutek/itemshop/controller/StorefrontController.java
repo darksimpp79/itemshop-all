@@ -1,8 +1,8 @@
 package pl.ziutek.itemshop.controller;
 
 import jakarta.servlet.http.HttpServletRequest;
+import jakarta.transaction.Transactional;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.http.CacheControl;
@@ -15,7 +15,8 @@ import pl.ziutek.itemshop.repository.DailyRewardRepository;
 import pl.ziutek.itemshop.repository.PendingItemRepository;
 import pl.ziutek.itemshop.repository.ProductRepository;
 import pl.ziutek.itemshop.repository.ShopRepository;
-import pl.ziutek.itemshop.repository.ShopModeRepository; // DODANO IMPORT
+import pl.ziutek.itemshop.repository.PlayerWalletRepository;
+import pl.ziutek.itemshop.model.PlayerWallet;
 import pl.ziutek.itemshop.service.StorefrontService;
 import com.stripe.Stripe;
 import com.stripe.model.checkout.Session;
@@ -23,79 +24,80 @@ import com.stripe.param.checkout.SessionCreateParams;
 import org.springframework.beans.factory.annotation.Value;
 
 import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 @RestController
 @RequestMapping("/api/storefront")
 public class StorefrontController {
 
-    @Autowired
-    private ShopRepository shopRepository;
-    @Autowired
-    private ProductRepository productRepository;
-    @Autowired
-    private PendingItemRepository itemRepository;
-    @Autowired
-    private DailyRewardRepository dailyRewardRepository;
+    // Regex dla nicku Minecraft: 3–16 znaków, litery/cyfry/podkreślnik
+    private static final String NICK_REGEX = "^[a-zA-Z0-9_]{3,16}$";
 
-    @Autowired
-    private ShopModeRepository shopModeRepository; // DODANE REPOZYTORIUM
-
-    @Autowired
-    private StorefrontService storefrontService;
+    @Autowired private ShopRepository shopRepository;
+    @Autowired private ProductRepository productRepository;
+    @Autowired private PendingItemRepository itemRepository;
+    @Autowired private DailyRewardRepository dailyRewardRepository;
+    @Autowired private PlayerWalletRepository playerWalletRepository;
+    @Autowired private pl.ziutek.itemshop.repository.LootboxRewardRepository lootboxRewardRepository;
+    @Autowired private StorefrontService storefrontService;
 
     @Value("${stripe.api.key}")
     private String stripeApiKey;
 
     public record TopDonatorDTO(String nick, BigDecimal amount) {}
     public record RecentPurchaseDTO(String nick, String item, String time) {}
-    public record ShopInfoDTO(String serverName, String serverIp, String theme, String discordLink, String bannerText, String termsContent) {} {}
+    public record ShopInfoDTO(String serverName, String serverIp, String theme, String discordLink, String bannerText, String termsContent) {}
 
-    // 0. Pobieranie podstawowych informacji o sklepie
+    // --- Helpers ---
+
+    private boolean isValidNick(String nick) {
+        return nick != null && nick.matches(NICK_REGEX);
+    }
+
+    // Timing-safe porównanie API key — zapobiega timing attack
+    private boolean apiKeyMatches(String stored, String provided) {
+        if (stored == null || provided == null) return false;
+        return MessageDigest.isEqual(
+                stored.getBytes(StandardCharsets.UTF_8),
+                provided.getBytes(StandardCharsets.UTF_8)
+        );
+    }
+
+    // 0. Podstawowe informacje o sklepie
     @GetMapping("/{serverName}/info")
     public ResponseEntity<?> getShopInfo(@PathVariable String serverName) {
         Optional<Shop> shopOpt = storefrontService.findShopByServerName(serverName);
         if (shopOpt.isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono sklepu!");
-
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noCache())
                 .body(storefrontService.getShopInfoDto(serverName));
     }
 
-    // 1. Pobieranie produktów
+    // 1. Produkty
     @GetMapping("/{serverName}/produkty")
     public ResponseEntity<?> getProducts(@PathVariable String serverName) {
         Optional<Shop> shopOpt = storefrontService.findShopByServerName(serverName);
-
-        if (shopOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono sklepu!");
-        }
-
-        List<Product> products = storefrontService.getProductsForShop(shopOpt.get());
+        if (shopOpt.isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono sklepu!");
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noCache())
-                .body(products);
+                .body(storefrontService.getProductsForShop(shopOpt.get()));
     }
 
-    // 1.5. POBIERANIE TRYBÓW (NOWOŚĆ DLA STRONY GŁÓWNEJ GRACZA)
+    // 1.5. Tryby
     @GetMapping("/{serverName}/tryby")
     public ResponseEntity<?> getShopModesPublic(@PathVariable String serverName) {
         Optional<Shop> shopOpt = storefrontService.findShopByServerName(serverName);
-
-        if (shopOpt.isEmpty()) {
-            return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono sklepu!");
-        }
-
-        // Zwraca listę trybów (z nazwami, opisami i linkami do zdjęć) z bazy
+        if (shopOpt.isEmpty()) return ResponseEntity.status(HttpStatus.NOT_FOUND).body("Nie znaleziono sklepu!");
         return ResponseEntity.ok()
                 .cacheControl(CacheControl.noCache())
                 .body(storefrontService.getModesForShop(shopOpt.get()));
     }
 
-    // 2. Proces zakupu
+    // 2. Checkout
     @PostMapping("/{serverName}/checkout")
     public ResponseEntity<?> createProductCheckout(
             @PathVariable String serverName,
@@ -104,8 +106,10 @@ public class StorefrontController {
             @RequestParam(required = false) String mode,
             HttpServletRequest request
     ) {
-        if (nick == null || nick.trim().isEmpty()) {
-            return ResponseEntity.badRequest().body("Błąd: Nick gracza nie może być pusty!");
+        // Walidacja nicku — zapobiega command injection
+        if (!isValidNick(nick)) {
+            return ResponseEntity.badRequest()
+                    .body("Nieprawidłowy nick! Dozwolone: litery, cyfry, podkreślnik (3–16 znaków).");
         }
 
         Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
@@ -121,23 +125,33 @@ public class StorefrontController {
 
         Stripe.apiKey = stripeApiKey;
         long amount = Math.max(0, Math.round(product.getPrice() * 100.0));
-
         String effectiveMode = (mode != null && !mode.isBlank()) ? mode.trim().toLowerCase() : product.getMode();
 
-        // Powrót po Stripe na właściwy sklep (custom domain) lub dev (localhost z parametrem serverName)
+        String origin = request.getHeader("Origin");
+        if (origin == null || origin.isBlank()) {
+            String referer = request.getHeader("Referer");
+            if (referer != null && referer.startsWith("http")) {
+                int idx = referer.indexOf("/", 8); // znajdź pierwszy '/' po 'https://'
+                origin = (idx != -1) ? referer.substring(0, idx) : referer;
+            }
+        }
+
         String successUrl;
         String cancelUrl;
-        if (shop.getCustomDomain() != null && !shop.getCustomDomain().isBlank()) {
+
+        if (origin != null && !origin.isBlank()) {
+            successUrl = origin + "/shop/" + effectiveMode + "?payment=success";
+            cancelUrl  = origin + "/shop/" + effectiveMode + "?payment=cancel";
+        } else if (shop.getCustomDomain() != null && !shop.getCustomDomain().isBlank()) {
             String base = "https://" + shop.getCustomDomain().trim();
             successUrl = base + "/shop/" + effectiveMode + "?payment=success";
-            cancelUrl = base + "/shop/" + effectiveMode + "?payment=cancel";
+            cancelUrl  = base + "/shop/" + effectiveMode + "?payment=cancel";
         } else {
-            // Dev fallback: bez subdomeny, więc kierujemy na /{theme}/shop/{mode} i dopinamy serverName w query.
-            String base = "http://localhost:3000";
+            String base  = "http://localhost:3000";
             String theme = (shop.getTheme() != null && !shop.getTheme().isBlank()) ? shop.getTheme().trim().toLowerCase() : "default";
-            String qs = "serverName=" + shop.getServerName().toLowerCase() + "&payment=";
-            successUrl = base + "/" + theme + "/shop/" + effectiveMode + "?" + qs + "success";
-            cancelUrl = base + "/" + theme + "/shop/" + effectiveMode + "?" + qs + "cancel";
+            String qs    = "serverName=" + shop.getServerName().toLowerCase() + "&payment=";
+            successUrl   = base + "/" + theme + "/shop/" + effectiveMode + "?" + qs + "success";
+            cancelUrl    = base + "/" + theme + "/shop/" + effectiveMode + "?" + qs + "cancel";
         }
 
         try {
@@ -152,22 +166,16 @@ public class StorefrontController {
                     .putMetadata("productId", product.getId().toString())
                     .putMetadata("nick", nick.trim())
                     .putMetadata("mode", effectiveMode)
-                    .addLineItem(
-                            SessionCreateParams.LineItem.builder()
-                                    .setQuantity(1L)
-                                    .setPriceData(
-                                            SessionCreateParams.LineItem.PriceData.builder()
-                                                    .setCurrency("pln")
-                                                    .setUnitAmount(amount)
-                                                    .setProductData(
-                                                            SessionCreateParams.LineItem.PriceData.ProductData.builder()
-                                                                    .setName(product.getName())
-                                                                    .build()
-                                                    )
-                                                    .build()
-                                    )
-                                    .build()
-                    )
+                    .addLineItem(SessionCreateParams.LineItem.builder()
+                            .setQuantity(1L)
+                            .setPriceData(SessionCreateParams.LineItem.PriceData.builder()
+                                    .setCurrency("pln")
+                                    .setUnitAmount(amount)
+                                    .setProductData(SessionCreateParams.LineItem.PriceData.ProductData.builder()
+                                            .setName(product.getName())
+                                            .build())
+                                    .build())
+                            .build())
                     .build();
 
             Session session = Session.create(params);
@@ -177,7 +185,7 @@ public class StorefrontController {
         }
     }
 
-    // 3. DYNAMICZNA TOPKA
+    // 3. Top donatorzy
     @GetMapping("/{serverName}/top-donatorzy")
     public ResponseEntity<List<TopDonatorDTO>> getTopDonators(@PathVariable String serverName) {
         return ResponseEntity.ok()
@@ -185,7 +193,7 @@ public class StorefrontController {
                 .body(storefrontService.getTopDonators(serverName));
     }
 
-    // 4. OSTATNIE ZAKUPY
+    // 4. Ostatnie zakupy
     @GetMapping("/{serverName}/ostatnie-zakupy")
     public ResponseEntity<List<RecentPurchaseDTO>> getRecentPurchases(@PathVariable String serverName) {
         return ResponseEntity.ok()
@@ -193,21 +201,27 @@ public class StorefrontController {
                 .body(storefrontService.getRecentPurchases(serverName));
     }
 
-    // --- KLUCZOWA POPRAWKA: NAGRODA Z UWZGLĘDNIENIEM TRYBU I LICZNIKA ---
+    // 5. Nagroda dzienna — @Transactional chroni przed race condition
+    @Transactional
     @PostMapping("/{serverName}/nagroda")
     public ResponseEntity<?> claimDailyReward(
             @PathVariable String serverName,
             @RequestParam String nick,
             @RequestParam(required = false) String mode) {
 
-        // Normalizacja mode (małe litery, domyślnie survival)
+        // Walidacja nicku
+        if (!isValidNick(nick)) {
+            return ResponseEntity.badRequest()
+                    .body("Nieprawidłowy nick! Dozwolone: litery, cyfry, podkreślnik (3–16 znaków).");
+        }
+
         String activeMode = (mode != null && !mode.isEmpty()) ? mode.toLowerCase() : "survival";
 
         Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
                 .orElseThrow(() -> new RuntimeException("Nie znaleziono sklepu: " + serverName));
 
-        // Sprawdzanie nagrody w bazie (Nick + Sklep + TRYB)
-        Optional<DailyReward> rewardOpt = dailyRewardRepository.findByPlayerNameAndServerNameAndModeIgnoreCase(nick, serverName, activeMode);
+        Optional<DailyReward> rewardOpt = dailyRewardRepository
+                .findByPlayerNameAndServerNameAndModeIgnoreCase(nick, serverName, activeMode);
         LocalDateTime now = LocalDateTime.now();
 
         if (rewardOpt.isPresent()) {
@@ -217,14 +231,11 @@ public class StorefrontController {
                 long h = totalSeconds / 3600;
                 long m = (totalSeconds % 3600) / 60;
                 long s = totalSeconds % 60;
-
-                // Wysyłamy format HH:mm:ss dla Reactowego licznika
                 return ResponseEntity.status(HttpStatus.TOO_MANY_REQUESTS)
                         .body("Odebrałeś już bonus. Spróbuj za: " + String.format("%02d:%02d:%02d", h, m, s));
             }
         }
 
-        // Aktualizacja lub stworzenie nowego rekordu nagrody
         DailyReward reward = rewardOpt.orElse(new DailyReward());
         reward.setPlayerName(nick);
         reward.setServerName(serverName);
@@ -232,20 +243,120 @@ public class StorefrontController {
         reward.setLastClaimed(now);
         dailyRewardRepository.save(reward);
 
-        // Dodanie nagrody do magazynu
-        String command = shop.getDailyRewardCommand() != null ? shop.getDailyRewardCommand() : "give " + nick + " emerald 1";
+        String command   = shop.getDailyRewardCommand() != null ? shop.getDailyRewardCommand() : "give {player} emerald 1";
         String rewardName = shop.getDailyRewardName() != null ? shop.getDailyRewardName() : "Darmowy Bonus 24h";
 
         PendingItem dailyItem = new PendingItem();
         dailyItem.setPlayerName(nick);
         dailyItem.setShop(shop);
         dailyItem.setItemName(rewardName);
+        // nick jest już zwalidowany regex'em — bezpieczne podstawienie
         dailyItem.setRewardCommand(command.replace("{player}", nick));
         dailyItem.setMode(activeMode);
         dailyItem.setClaimed(false);
         itemRepository.save(dailyItem);
 
         return ResponseEntity.ok("Nagroda przyznana!");
+    }
+
+    // 6. Portfel gracza
+    @GetMapping("/{serverName}/wallet/{nick}")
+    public ResponseEntity<?> getPlayerWallet(@PathVariable String serverName, @PathVariable String nick) {
+        if (!isValidNick(nick)) {
+            return ResponseEntity.badRequest().body("Nieprawidłowy nick.");
+        }
+        Optional<PlayerWallet> walletOpt = playerWalletRepository.findByNicknameIgnoreCase(nick.trim());
+        int points = walletOpt.map(PlayerWallet::getPoints).orElse(0);
+        return ResponseEntity.ok(java.util.Map.of("points", points));
+    }
+
+    // 7. Otwieranie Lootboxa
+    @Transactional
+    @PostMapping("/{serverName}/lootbox/{nick}")
+    public ResponseEntity<?> openLootbox(
+            @PathVariable String serverName,
+            @PathVariable String nick,
+            @RequestParam(required = false) String mode) {
+        if (!isValidNick(nick)) {
+            return ResponseEntity.badRequest().body("Nieprawidłowy nick.");
+        }
+
+        Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
+                .orElseThrow(() -> new RuntimeException("Nie znaleziono sklepu: " + serverName));
+
+        PlayerWallet wallet = playerWalletRepository.findByNicknameIgnoreCase(nick.trim())
+                .orElse(null);
+
+        int cost = 500;
+        if (wallet == null || wallet.getPoints() < cost) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Zbyt mało punktów! Skrzynka kosztuje " + cost + " pkt.");
+        }
+
+        // Pobieramy punkty
+        wallet.setPoints(wallet.getPoints() - cost);
+        playerWalletRepository.save(wallet);
+
+        // Pobranie nagród z bazy dla tego sklepu
+        List<pl.ziutek.itemshop.model.LootboxReward> dbRewards = lootboxRewardRepository.findByShop(shop);
+        
+        String command;
+        String rewardName;
+        
+        if (dbRewards.isEmpty()) {
+            // Fallback, jeśli sklep nie skonfigurował nagród
+            String[] rewards = {
+                    "give {player} diamond 5",
+                    "give {player} emerald 10",
+                    "give {player} iron_ingot 64",
+                    "give {player} golden_apple 2",
+                    "give {player} netherite_ingot 1"
+            };
+            String[] rewardNames = {
+                    "5x Diament",
+                    "10x Szmaragd",
+                    "64x Żelazo",
+                    "2x Złote Jabłko",
+                    "1x Netherite"
+            };
+            int randomIndex = new java.util.Random().nextInt(rewards.length);
+            command = rewards[randomIndex];
+            rewardName = rewardNames[randomIndex];
+        } else {
+            // Ważone losowanie nagród
+            int totalWeight = dbRewards.stream().mapToInt(r -> r.getWeight() != null ? r.getWeight() : 1).sum();
+            int randomValue = new java.util.Random().nextInt(totalWeight);
+            int currentWeightSum = 0;
+            
+            pl.ziutek.itemshop.model.LootboxReward selectedReward = dbRewards.get(0); // fallback
+            for (pl.ziutek.itemshop.model.LootboxReward r : dbRewards) {
+                int w = r.getWeight() != null ? r.getWeight() : 1;
+                currentWeightSum += w;
+                if (randomValue < currentWeightSum) {
+                    selectedReward = r;
+                    break;
+                }
+            }
+            
+            command = selectedReward.getCommand();
+            rewardName = selectedReward.getName();
+        }
+        String activeMode = (mode != null && !mode.isEmpty()) ? mode.toLowerCase() : "survival";
+
+        // Dodanie przedmiotu do pending items (do odebrania na serwerze)
+        PendingItem boxItem = new PendingItem();
+        boxItem.setPlayerName(nick.trim());
+        boxItem.setShop(shop);
+        boxItem.setItemName("Lootbox: " + rewardName);
+        boxItem.setRewardCommand(command.replace("{player}", nick.trim()));
+        boxItem.setMode(activeMode);
+        boxItem.setClaimed(false);
+        itemRepository.save(boxItem);
+
+        return ResponseEntity.ok(java.util.Map.of(
+                "success", true,
+                "reward", rewardName,
+                "message", "Wylosowano: " + rewardName + "! Przedmiot czeka w /magazyn na trybie " + activeMode
+        ));
     }
 
     @GetMapping("/identify")
@@ -260,6 +371,7 @@ public class StorefrontController {
                 .orElse(ResponseEntity.status(HttpStatus.NOT_FOUND).build());
     }
 
+    // Endpoint dla pluginu MC — timing-safe porównanie klucza API
     @GetMapping("/{serverName}/magazyn/{playerName}")
     public ResponseEntity<List<PendingItem>> getMagazyn(
             @PathVariable String serverName,
@@ -270,11 +382,12 @@ public class StorefrontController {
         Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
                 .orElseThrow(() -> new RuntimeException("Sklep nie istnieje"));
 
-        if (!shop.getApiKey().equals(apiKey)) {
+        if (!apiKeyMatches(shop.getApiKey(), apiKey)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).build();
         }
 
-        List<PendingItem> items = itemRepository.findByShopAndPlayerNameAndModeIgnoreCaseAndClaimedFalse(shop, playerName, mode);
+        List<PendingItem> items = itemRepository
+                .findByShopAndPlayerNameAndModeIgnoreCaseAndClaimedFalse(shop, playerName, mode);
         return ResponseEntity.ok(items);
     }
 
@@ -287,7 +400,7 @@ public class StorefrontController {
         Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
                 .orElseThrow(() -> new RuntimeException("Sklep nie istnieje"));
 
-        if (!shop.getApiKey().equals(apiKey)) {
+        if (!apiKeyMatches(shop.getApiKey(), apiKey)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body("Błędny klucz API!");
         }
 

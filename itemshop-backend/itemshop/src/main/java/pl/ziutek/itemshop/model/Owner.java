@@ -35,4 +35,19 @@ public class Owner {
 
     @Column(name = "role", nullable = false, length = 32)
     private String role = "USER";
+
+    @Column(name = "email_verified", nullable = false)
+    private boolean emailVerified = false;
+
+    @Column(name = "two_factor_enabled", nullable = false)
+    private boolean twoFactorEnabled = false;
+
+    @Column(name = "first_name", length = 100)
+    private String firstName;
+
+    @Column(name = "last_name", length = 100)
+    private String lastName;
+
+    @Column(name = "phone_number", length = 30)
+    private String phoneNumber;
 }
