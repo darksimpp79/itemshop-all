@@ -17,7 +17,9 @@ public class AuthCode {
     public enum Purpose {
         REGISTER,
         LOGIN_2FA,
-        ENABLE_2FA
+        ENABLE_2FA,
+        PASSWORD_RESET,
+        CHANGE_PASSWORD
     }
 
     @Id

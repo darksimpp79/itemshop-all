@@ -3,8 +3,11 @@ package pl.ziutek.itemshop.controller;
 import com.stripe.Stripe;
 import com.stripe.exception.SignatureVerificationException;
 import com.stripe.model.Event;
+import com.stripe.model.Invoice;
+import com.stripe.model.Subscription;
 import com.stripe.model.checkout.Session;
 import com.stripe.net.Webhook;
+import com.stripe.param.SubscriptionUpdateParams;
 import com.stripe.param.checkout.SessionCreateParams;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,6 +20,9 @@ import org.springframework.web.bind.annotation.*;
 import pl.ziutek.itemshop.model.*;
 import pl.ziutek.itemshop.repository.*;
 
+import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -34,6 +40,9 @@ public class PaymentController {
     @Value("${stripe.webhook.secret}")
     private String stripeWebhookSecret;
 
+    @Value("${stripe.price.pro-monthly}")
+    private String stripePriceProMonthly;
+
     @Value("${app.frontend.base-url:http://localhost:3000}")
     private String frontendBaseUrl;
 
@@ -47,46 +56,75 @@ public class PaymentController {
 
     @PostMapping("/create-checkout-session")
     public ResponseEntity<?> createCheckoutSession() {
-        if (stripeApiKey == null || stripeApiKey.isBlank() || stripeApiKey.contains("REPLACE_ME")) {
-            log.error("[Payment] Brak konfiguracji klucza Stripe API.");
-            return ResponseEntity.status(500).body("Płatności są tymczasowo niedostępne.");
-        }
-
         Stripe.apiKey = stripeApiKey;
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
         if (email == null || !email.contains("@")) {
             return ResponseEntity.status(400).body("Niepoprawne dane konta.");
         }
 
+        Optional<Owner> ownerOpt = ownerRepository.findByEmail(email);
+        if (ownerOpt.isEmpty()) return ResponseEntity.status(400).body("Brak konta.");
+
+        Owner owner = ownerOpt.get();
+        if ("PRO".equals(owner.getSubscriptionPlan()) && owner.getSubscriptionExpiresAt() != null
+                && owner.getSubscriptionExpiresAt().isAfter(LocalDateTime.now())) {
+            return ResponseEntity.status(400).body("Masz już aktywny plan PRO.");
+        }
+
         try {
-            SessionCreateParams params = SessionCreateParams.builder()
+            SessionCreateParams.Builder builder = SessionCreateParams.builder()
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.BLIK)
-                    .setMode(SessionCreateParams.Mode.PAYMENT)
+                    .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
                     .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
                     .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
                     .setCustomerEmail(email)
+                    .putMetadata("ownerEmail", email)
                     .putMetadata("type", "subscription_pro")
                     .addLineItem(SessionCreateParams.LineItem.builder()
                             .setQuantity(1L)
-                            .setPriceData(SessionCreateParams.LineItem.PriceData.builder()
-                                    .setCurrency("pln")
-                                    .setUnitAmount(2999L)
-                                    .setProductData(SessionCreateParams.LineItem.PriceData.ProductData.builder()
-                                            .setName("Ziutek PRO - Odblokowanie Konta")
-                                            .build())
-                                    .build())
-                            .build())
-                    .build();
+                            .setPrice(stripePriceProMonthly)
+                            .build());
 
-            Session session = Session.create(params);
+            // Podpinamy istniejącego Stripe Customer jeśli mamy ID
+            if (owner.getStripeCustomerId() != null) {
+                builder.setCustomer(owner.getStripeCustomerId());
+            }
+
+            Session session = Session.create(builder.build());
             return ResponseEntity.ok(Map.of("url", session.getUrl()));
 
         } catch (Exception e) {
-            // FIX: logujemy szczegóły po stronie serwera, klient dostaje bezpieczny komunikat
             log.error("[Payment] Błąd tworzenia sesji Stripe dla {}: {}", email, e.getMessage(), e);
             return ResponseEntity.status(500).body("Nie udało się utworzyć sesji płatności. Spróbuj ponownie.");
         }
+    }
+
+    @PostMapping("/cancel-subscription")
+    public ResponseEntity<?> cancelSubscription() {
+        Stripe.apiKey = stripeApiKey;
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+
+        return ownerRepository.findByEmail(email).<ResponseEntity<?>>map(owner -> {
+            if (!"PRO".equals(owner.getSubscriptionPlan())) {
+                return ResponseEntity.badRequest().body("Nie masz aktywnego planu PRO.");
+            }
+            if (owner.getStripeSubscriptionId() == null) {
+                return ResponseEntity.badRequest().body("Brak ID subskrypcji — skontaktuj się z pomocą techniczną.");
+            }
+            try {
+                // Anuluj na koniec bieżącego okresu (nie od razu) — użytkownik zachowuje PRO do końca
+                Subscription sub = Subscription.retrieve(owner.getStripeSubscriptionId());
+                sub.update(SubscriptionUpdateParams.builder()
+                        .setCancelAtPeriodEnd(true)
+                        .build());
+                log.info("[Payment] Subskrypcja {} oznaczona do anulowania na koniec okresu. Konto: {}", owner.getStripeSubscriptionId(), email);
+                return ResponseEntity.ok(Map.of("message", "Subskrypcja zostanie anulowana po zakończeniu bieżącego okresu. Do tego czasu zachowujesz dostęp PRO."));
+            } catch (Exception e) {
+                log.error("[Payment] Błąd anulowania subskrypcji dla {}: {}", email, e.getMessage(), e);
+                return ResponseEntity.status(500).body("Nie udało się anulować subskrypcji. Spróbuj ponownie.");
+            }
+        }).orElse(ResponseEntity.status(404).body("Konto nie istnieje."));
     }
 
     @PostMapping("/webhook")
@@ -116,8 +154,11 @@ public class PaymentController {
                 return ResponseEntity.ok("Already processed");
             }
 
-            if ("checkout.session.completed".equals(event.getType())) {
-                handleCheckoutCompleted(event);
+            switch (event.getType()) {
+                case "checkout.session.completed"       -> handleCheckoutCompleted(event);
+                case "invoice.payment_succeeded"        -> handleInvoicePaid(event);
+                case "customer.subscription.deleted"    -> handleSubscriptionDeleted(event);
+                default -> log.debug("[Webhook] Zignorowano event: {}", event.getType());
             }
 
             ProcessedStripeEvent processed = new ProcessedStripeEvent();
@@ -136,7 +177,7 @@ public class PaymentController {
     }
 
     private void handleCheckoutCompleted(Event event) {
-        Session session = (Session) event.getData().getObject();
+        Session session = (Session) event.getData().getObject(); // deprecated ale jedyne dostępne bez dodatkowej deserializacji
         Map<String, String> metadata = session.getMetadata() != null ? session.getMetadata() : new HashMap<>();
         String type = metadata.getOrDefault("type", "");
 
@@ -149,20 +190,68 @@ public class PaymentController {
 
     private void handleSubscriptionPro(Session session) {
         String customerEmail = session.getCustomerEmail();
+        String customerId    = session.getCustomer();
+        String subscriptionId = session.getSubscription();
+
         if (customerEmail == null || customerEmail.isBlank()) {
+            // Fallback — szukaj po metadata.ownerEmail
+            customerEmail = session.getMetadata() != null
+                    ? session.getMetadata().getOrDefault("ownerEmail", null)
+                    : null;
+        }
+        if (customerEmail == null) {
             log.warn("[Webhook] subscription_pro bez emaila klienta — sesja: {}", session.getId());
             return;
         }
 
-        Optional<Owner> ownerOpt = ownerRepository.findByEmail(customerEmail);
-        if (ownerOpt.isPresent()) {
-            Owner owner = ownerOpt.get();
+        final String finalEmail = customerEmail;
+        ownerRepository.findByEmail(finalEmail).ifPresentOrElse(owner -> {
             owner.setSubscriptionPlan("PRO");
+            owner.setSubscriptionExpiresAt(LocalDateTime.now().plusMonths(1));
+            if (customerId != null)    owner.setStripeCustomerId(customerId);
+            if (subscriptionId != null) owner.setStripeSubscriptionId(subscriptionId);
             ownerRepository.save(owner);
-            log.info("[Webhook] Konto {} upgrade do PRO.", customerEmail);
-        } else {
-            log.warn("[Webhook] Nie znaleziono konta dla emaila: {}", customerEmail);
+            log.info("[Webhook] Konto {} upgrade do PRO (sub: {}).", finalEmail, subscriptionId);
+        }, () -> log.warn("[Webhook] Nie znaleziono konta dla emaila: {}", finalEmail));
+    }
+
+    private void handleInvoicePaid(Event event) {
+        Invoice invoice = (Invoice) event.getData().getObject();
+        String customerId = invoice.getCustomer();
+
+        // Wyciągamy koniec okresu subskrypcji z pierwszej pozycji faktury
+        Long periodEnd = null;
+        try {
+            var lines = invoice.getLines();
+            if (lines != null && !lines.getData().isEmpty()) {
+                periodEnd = lines.getData().get(0).getPeriod().getEnd();
+            }
+        } catch (Exception e) {
+            log.warn("[Webhook] Nie udało się wyciągnąć periodEnd z invoice: {}", e.getMessage());
         }
+
+        final Long finalPeriodEnd = periodEnd;
+        ownerRepository.findByStripeCustomerId(customerId).ifPresentOrElse(owner -> {
+            owner.setSubscriptionPlan("PRO");
+            owner.setSubscriptionExpiresAt(finalPeriodEnd != null
+                    ? LocalDateTime.ofInstant(Instant.ofEpochSecond(finalPeriodEnd), ZoneId.systemDefault())
+                    : LocalDateTime.now().plusMonths(1));
+            ownerRepository.save(owner);
+            log.info("[Webhook] Odnowiono PRO dla customerId={}, wygasa: {}", customerId, owner.getSubscriptionExpiresAt());
+        }, () -> log.warn("[Webhook] invoice.payment_succeeded — brak konta dla customerId={}", customerId));
+    }
+
+    private void handleSubscriptionDeleted(Event event) {
+        Subscription sub = (Subscription) event.getData().getObject();
+        String customerId = sub.getCustomer();
+
+        ownerRepository.findByStripeCustomerId(customerId).ifPresentOrElse(owner -> {
+            owner.setSubscriptionPlan("FREE");
+            owner.setSubscriptionExpiresAt(null);
+            owner.setStripeSubscriptionId(null);
+            ownerRepository.save(owner);
+            log.info("[Webhook] Subskrypcja anulowana dla customerId={}. Konto zdegradowane do FREE.", customerId);
+        }, () -> log.warn("[Webhook] subscription.deleted — brak konta dla customerId={}", customerId));
     }
 
     private void handleProductPurchase(Map<String, String> metadata) {

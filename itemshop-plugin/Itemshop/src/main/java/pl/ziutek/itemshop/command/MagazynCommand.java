@@ -304,33 +304,48 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
     }
 
     private void oznaczJakoOdebrane(Long itemId, String signature, Player player) {
+        oznaczJakoOdebraneZRetry(itemId, signature, player, 1);
+    }
+
+    private void oznaczJakoOdebraneZRetry(Long itemId, String signature, Player player, int attempt) {
         HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                 .uri(URI.create(API_URL + "odbierz/" + itemId))
                 .header("X-API-Key", API_KEY)
+                .timeout(java.time.Duration.ofSeconds(5))
                 .POST(HttpRequest.BodyPublishers.noBody());
 
         if (signature != null && !signature.isEmpty()) {
             requestBuilder.header("X-Signature", signature);
         }
 
-        // ZMIANA: logowanie błędów — bez tego podwójny odbiór był niemożliwy do wykrycia
         httpClient.sendAsync(requestBuilder.build(), HttpResponse.BodyHandlers.ofString())
                 .thenAccept(response -> {
-                    if (response.statusCode() != 200) {
-                        plugin.getLogger().warning(
-                                "Błąd oznaczania item #" + itemId + " jako odebranego: HTTP " + response.statusCode()
-                                + " | gracz: " + player.getName()
-                        );
-                    }
+                    if (response.statusCode() == 200) return;
+                    plugin.getLogger().warning(
+                            "Oznaczanie item #" + itemId + " nieudane: HTTP " + response.statusCode()
+                            + " | gracz: " + player.getName() + " | próba: " + attempt);
+                    scheduleRetry(itemId, signature, player, attempt);
                 })
                 .exceptionally(e -> {
-                    plugin.getLogger().severe(
-                            "Nie udało się oznaczyć item #" + itemId + " jako odebranego"
-                            + " | gracz: " + player.getName()
-                            + " | błąd: " + e.getMessage()
-                    );
+                    plugin.getLogger().warning(
+                            "Oznaczanie item #" + itemId + " nieudane: " + e.getMessage()
+                            + " | gracz: " + player.getName() + " | próba: " + attempt);
+                    scheduleRetry(itemId, signature, player, attempt);
                     return null;
                 });
+    }
+
+    private void scheduleRetry(Long itemId, String signature, Player player, int attempt) {
+        if (attempt >= 3) {
+            plugin.getLogger().severe(
+                    "KRYTYCZNE: nie oznaczono item #" + itemId + " po 3 próbach!"
+                    + " Gracz: " + player.getName() + " może go odebrać ponownie.");
+            return;
+        }
+        long delayTicks = (long) Math.pow(2, attempt) * 20; // 2s, 4s backoff
+        Bukkit.getScheduler().runTaskLaterAsynchronously(plugin,
+                () -> oznaczJakoOdebraneZRetry(itemId, signature, player, attempt + 1),
+                delayTicks);
     }
 
     private void wyslijPomoc(CommandSender s) {

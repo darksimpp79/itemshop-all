@@ -2,6 +2,8 @@ package pl.ziutek.itemshop.controller;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.transaction.Transactional;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -34,7 +36,7 @@ import java.util.Optional;
 @RequestMapping("/api/storefront")
 public class StorefrontController {
 
-    // Regex dla nicku Minecraft: 3–16 znaków, litery/cyfry/podkreślnik
+    private static final Logger log = LoggerFactory.getLogger(StorefrontController.class);
     private static final String NICK_REGEX = "^[a-zA-Z0-9_]{3,16}$";
 
     @Autowired private ShopRepository shopRepository;
@@ -181,6 +183,8 @@ public class StorefrontController {
             Session session = Session.create(params);
             return ResponseEntity.ok(java.util.Map.of("url", session.getUrl()));
         } catch (Exception e) {
+            log.error("[Checkout] Błąd tworzenia sesji Stripe dla sklepu '{}', produkt {}: {}",
+                    serverName, productId, e.getMessage(), e);
             return ResponseEntity.status(500).body("Błąd generowania płatności.");
         }
     }
@@ -284,7 +288,9 @@ public class StorefrontController {
         Shop shop = shopRepository.findByServerNameIgnoreCase(serverName)
                 .orElseThrow(() -> new RuntimeException("Nie znaleziono sklepu: " + serverName));
 
-        PlayerWallet wallet = playerWalletRepository.findByNicknameIgnoreCase(nick.trim())
+        // findByNicknameForUpdate: SELECT FOR UPDATE — blokuje wiersz na czas transakcji.
+        // Eliminuje race condition gdy gracz wysyła równoczesne żądania otwarcia skrzynki.
+        PlayerWallet wallet = playerWalletRepository.findByNicknameForUpdate(nick.trim())
                 .orElse(null);
 
         int cost = 500;
@@ -292,7 +298,6 @@ public class StorefrontController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body("Zbyt mało punktów! Skrzynka kosztuje " + cost + " pkt.");
         }
 
-        // Pobieramy punkty
         wallet.setPoints(wallet.getPoints() - cost);
         playerWalletRepository.save(wallet);
 

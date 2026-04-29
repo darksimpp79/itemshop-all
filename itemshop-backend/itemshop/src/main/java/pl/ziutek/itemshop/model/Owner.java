@@ -6,6 +6,7 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.time.LocalDateTime;
 import java.util.List;
 
 @Entity
@@ -50,4 +51,22 @@ public class Owner {
 
     @Column(name = "phone_number", length = 30)
     private String phoneNumber;
+
+    @Column(name = "stripe_customer_id", length = 64)
+    private String stripeCustomerId;
+
+    @Column(name = "stripe_subscription_id", length = 64)
+    private String stripeSubscriptionId;
+
+    @Column(name = "subscription_expires_at")
+    private LocalDateTime subscriptionExpiresAt;
+
+    /** Base32-encoded TOTP secret (null when using email 2FA). */
+    @JsonIgnore
+    @Column(name = "totp_secret", length = 64)
+    private String totpSecret;
+
+    /** "EMAIL" (default) or "TOTP". */
+    @Column(name = "two_factor_method", length = 16, nullable = false)
+    private String twoFactorMethod = "EMAIL";
 }
