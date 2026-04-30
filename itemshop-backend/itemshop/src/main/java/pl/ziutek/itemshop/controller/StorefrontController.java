@@ -45,6 +45,7 @@ public class StorefrontController {
     @Autowired private DailyRewardRepository dailyRewardRepository;
     @Autowired private PlayerWalletRepository playerWalletRepository;
     @Autowired private pl.ziutek.itemshop.repository.LootboxRewardRepository lootboxRewardRepository;
+    @Autowired private pl.ziutek.itemshop.repository.PromoCodeRepository promoCodeRepository;
     @Autowired private StorefrontService storefrontService;
 
     @Value("${stripe.api.key}")
@@ -100,12 +101,34 @@ public class StorefrontController {
     }
 
     // 2. Checkout
+    @GetMapping("/{serverName}/promo/{code}")
+    public ResponseEntity<?> validatePromoCode(@PathVariable String serverName, @PathVariable String code) {
+        Optional<pl.ziutek.itemshop.model.Shop> shopOpt = shopRepository.findByServerNameIgnoreCase(serverName);
+        if (shopOpt.isEmpty()) return ResponseEntity.notFound().build();
+
+        return promoCodeRepository.findByShopAndCodeIgnoreCase(shopOpt.get(), code)
+                .<ResponseEntity<?>>map(pc -> {
+                    if (!pc.isActive()) return ResponseEntity.badRequest().body("Kod jest nieaktywny.");
+                    if (pc.getExpiresAt() != null && pc.getExpiresAt().isBefore(java.time.LocalDateTime.now()))
+                        return ResponseEntity.badRequest().body("Kod wygasł.");
+                    if (pc.getMaxUses() != null && pc.getCurrentUses() >= pc.getMaxUses())
+                        return ResponseEntity.badRequest().body("Kod został już wykorzystany.");
+                    return ResponseEntity.ok(java.util.Map.of(
+                            "valid", true,
+                            "discountPercent", pc.getDiscountPercent(),
+                            "code", pc.getCode().toUpperCase()
+                    ));
+                })
+                .orElse(ResponseEntity.badRequest().body("Nieprawidłowy kod promocyjny."));
+    }
+
     @PostMapping("/{serverName}/checkout")
     public ResponseEntity<?> createProductCheckout(
             @PathVariable String serverName,
             @RequestParam Long productId,
             @RequestParam String nick,
             @RequestParam(required = false) String mode,
+            @RequestParam(required = false) String promoCode,
             HttpServletRequest request
     ) {
         // Walidacja nicku — zapobiega command injection
@@ -126,7 +149,26 @@ public class StorefrontController {
         }
 
         Stripe.apiKey = stripeApiKey;
-        long amount = Math.max(0, Math.round(product.getPrice() * 100.0));
+        double basePrice = product.getPrice();
+        String appliedPromo = null;
+
+        // Walidacja i aplikacja kodu promo
+        if (promoCode != null && !promoCode.isBlank()) {
+            Optional<pl.ziutek.itemshop.model.PromoCode> promoOpt =
+                    promoCodeRepository.findByShopAndCodeIgnoreCase(shop, promoCode.trim());
+            if (promoOpt.isPresent()) {
+                pl.ziutek.itemshop.model.PromoCode pc = promoOpt.get();
+                boolean valid = pc.isActive()
+                        && (pc.getExpiresAt() == null || pc.getExpiresAt().isAfter(java.time.LocalDateTime.now()))
+                        && (pc.getMaxUses() == null || pc.getCurrentUses() < pc.getMaxUses());
+                if (valid) {
+                    basePrice = basePrice * (1.0 - pc.getDiscountPercent() / 100.0);
+                    appliedPromo = pc.getCode().toUpperCase();
+                }
+            }
+        }
+
+        long amount = Math.max(100, Math.round(basePrice * 100.0)); // min 1 PLN
         String effectiveMode = (mode != null && !mode.isBlank()) ? mode.trim().toLowerCase() : product.getMode();
 
         String origin = request.getHeader("Origin");
@@ -157,7 +199,7 @@ public class StorefrontController {
         }
 
         try {
-            SessionCreateParams params = SessionCreateParams.builder()
+            SessionCreateParams.Builder sessionBuilder = SessionCreateParams.builder()
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.BLIK)
                     .setMode(SessionCreateParams.Mode.PAYMENT)
@@ -167,7 +209,9 @@ public class StorefrontController {
                     .putMetadata("serverName", shop.getServerName())
                     .putMetadata("productId", product.getId().toString())
                     .putMetadata("nick", nick.trim())
-                    .putMetadata("mode", effectiveMode)
+                    .putMetadata("mode", effectiveMode);
+            if (appliedPromo != null) sessionBuilder.putMetadata("promoCode", appliedPromo);
+            SessionCreateParams params = sessionBuilder
                     .addLineItem(SessionCreateParams.LineItem.builder()
                             .setQuantity(1L)
                             .setPriceData(SessionCreateParams.LineItem.PriceData.builder()
@@ -362,6 +406,19 @@ public class StorefrontController {
                 "reward", rewardName,
                 "message", "Wylosowano: " + rewardName + "! Przedmiot czeka w /magazyn na trybie " + activeMode
         ));
+    }
+
+    // Publiczna lista nagród skrzynki — używana przez plugin MC do animacji
+    @GetMapping("/{serverName}/lootbox-nagrody")
+    public ResponseEntity<?> getLootboxRewards(@PathVariable String serverName) {
+        return shopRepository.findByServerNameIgnoreCase(serverName)
+                .<ResponseEntity<?>>map(shop -> {
+                    List<pl.ziutek.itemshop.model.LootboxReward> rewards = lootboxRewardRepository.findByShop(shop);
+                    return ResponseEntity.ok(rewards.stream()
+                            .map(r -> java.util.Map.of("name", r.getName(), "weight", r.getWeight() != null ? r.getWeight() : 1))
+                            .toList());
+                })
+                .orElse(ResponseEntity.notFound().build());
     }
 
     @GetMapping("/identify")

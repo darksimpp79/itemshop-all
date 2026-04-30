@@ -24,6 +24,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
@@ -43,6 +44,9 @@ public class PaymentController {
     @Value("${stripe.price.pro-monthly}")
     private String stripePriceProMonthly;
 
+    @Value("${stripe.price.starter-monthly}")
+    private String stripePriceStarterMonthly;
+
     @Value("${app.frontend.base-url:http://localhost:3000}")
     private String frontendBaseUrl;
 
@@ -53,6 +57,8 @@ public class PaymentController {
     @Autowired private PendingItemRepository pendingItemRepository;
     @Autowired private OrderRepository orderRepository;
     @Autowired private PlayerWalletRepository playerWalletRepository;
+    @Autowired private pl.ziutek.itemshop.repository.PromoCodeRepository promoCodeRepository;
+    @Autowired private pl.ziutek.itemshop.service.EmailService emailService;
 
     @PostMapping("/create-checkout-session")
     public ResponseEntity<?> createCheckoutSession() {
@@ -97,6 +103,45 @@ public class PaymentController {
         } catch (Exception e) {
             log.error("[Payment] Błąd tworzenia sesji Stripe dla {}: {}", email, e.getMessage(), e);
             return ResponseEntity.status(500).body("Nie udało się utworzyć sesji płatności. Spróbuj ponownie.");
+        }
+    }
+
+    @PostMapping("/create-checkout-session-starter")
+    public ResponseEntity<?> createStarterCheckoutSession() {
+        Stripe.apiKey = stripeApiKey;
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
+        if (email == null || !email.contains("@")) return ResponseEntity.status(400).body("Niepoprawne dane konta.");
+
+        Optional<Owner> ownerOpt = ownerRepository.findByEmail(email);
+        if (ownerOpt.isEmpty()) return ResponseEntity.status(400).body("Brak konta.");
+        Owner owner = ownerOpt.get();
+
+        if (List.of("STARTER","PRO").contains(owner.getSubscriptionPlan())
+                && owner.getSubscriptionExpiresAt() != null
+                && owner.getSubscriptionExpiresAt().isAfter(LocalDateTime.now())) {
+            return ResponseEntity.status(400).body("Masz już aktywny plan " + owner.getSubscriptionPlan() + ".");
+        }
+
+        try {
+            SessionCreateParams.Builder builder = SessionCreateParams.builder()
+                    .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
+                    .addPaymentMethodType(SessionCreateParams.PaymentMethodType.BLIK)
+                    .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
+                    .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
+                    .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
+                    .setCustomerEmail(email)
+                    .putMetadata("ownerEmail", email)
+                    .putMetadata("type", "subscription_starter")
+                    .addLineItem(SessionCreateParams.LineItem.builder()
+                            .setQuantity(1L)
+                            .setPrice(stripePriceStarterMonthly)
+                            .build());
+            if (owner.getStripeCustomerId() != null) builder.setCustomer(owner.getStripeCustomerId());
+            Session session = Session.create(builder.build());
+            return ResponseEntity.ok(Map.of("url", session.getUrl()));
+        } catch (Exception e) {
+            log.error("[Payment] Błąd tworzenia sesji Starter dla {}: {}", email, e.getMessage(), e);
+            return ResponseEntity.status(500).body("Nie udało się utworzyć sesji płatności.");
         }
     }
 
@@ -183,8 +228,15 @@ public class PaymentController {
 
         if ("subscription_pro".equals(type)) {
             handleSubscriptionPro(session);
+        } else if ("subscription_starter".equals(type)) {
+            handleSubscriptionStarter(session);
         } else if ("product_purchase".equals(type)) {
-            handleProductPurchase(metadata);
+            String customerEmail = null;
+            try {
+                var details = session.getCustomerDetails();
+                if (details != null) customerEmail = details.getEmail();
+            } catch (Exception ignored) {}
+            handleProductPurchase(metadata, customerEmail);
         }
     }
 
@@ -213,6 +265,26 @@ public class PaymentController {
             ownerRepository.save(owner);
             log.info("[Webhook] Konto {} upgrade do PRO (sub: {}).", finalEmail, subscriptionId);
         }, () -> log.warn("[Webhook] Nie znaleziono konta dla emaila: {}", finalEmail));
+    }
+
+    private void handleSubscriptionStarter(Session session) {
+        String customerEmail = session.getCustomerEmail();
+        String customerId    = session.getCustomer();
+        String subscriptionId = session.getSubscription();
+        if (customerEmail == null || customerEmail.isBlank()) {
+            customerEmail = session.getMetadata() != null
+                    ? session.getMetadata().getOrDefault("ownerEmail", null) : null;
+        }
+        if (customerEmail == null) { log.warn("[Webhook] subscription_starter bez emaila — sesja: {}", session.getId()); return; }
+        final String finalEmail = customerEmail;
+        ownerRepository.findByEmail(finalEmail).ifPresentOrElse(owner -> {
+            owner.setSubscriptionPlan("STARTER");
+            owner.setSubscriptionExpiresAt(LocalDateTime.now().plusMonths(1));
+            if (customerId != null)     owner.setStripeCustomerId(customerId);
+            if (subscriptionId != null) owner.setStripeSubscriptionId(subscriptionId);
+            ownerRepository.save(owner);
+            log.info("[Webhook] Konto {} upgrade do STARTER (sub: {}).", finalEmail, subscriptionId);
+        }, () -> log.warn("[Webhook] subscription_starter — brak konta dla emaila: {}", finalEmail));
     }
 
     private void handleInvoicePaid(Event event) {
@@ -254,11 +326,12 @@ public class PaymentController {
         }, () -> log.warn("[Webhook] subscription.deleted — brak konta dla customerId={}", customerId));
     }
 
-    private void handleProductPurchase(Map<String, String> metadata) {
+    private void handleProductPurchase(Map<String, String> metadata, String customerEmail) {
         String serverName   = metadata.get("serverName");
         String productIdStr = metadata.get("productId");
         String nick         = metadata.get("nick");
         String mode         = metadata.getOrDefault("mode", "survival");
+        String promoCode    = metadata.get("promoCode");
 
         if (nick == null || !nick.matches(NICK_REGEX)) {
             log.error("[Webhook] Nieprawidłowy nick w metadanych: '{}'", nick);
@@ -324,6 +397,20 @@ public class PaymentController {
             wallet.setPoints(wallet.getPoints() + pointsToAdd);
             playerWalletRepository.save(wallet);
             log.info("[Webhook] Dodano {} punktów dla gracza '{}'.", pointsToAdd, nick.trim());
+        }
+
+        // Inkrementacja użycia kodu promo
+        if (promoCode != null && !promoCode.isBlank()) {
+            promoCodeRepository.findByShopAndCodeIgnoreCase(shop, promoCode).ifPresent(pc -> {
+                pc.setCurrentUses(pc.getCurrentUses() + 1);
+                promoCodeRepository.save(pc);
+            });
+        }
+
+        // Email potwierdzający zakup (opcjonalny — nie blokuje zakupu)
+        if (customerEmail != null && !customerEmail.isBlank()) {
+            emailService.sendPurchaseConfirmation(customerEmail, nick.trim(),
+                    product.getName(), serverName, pointsToAdd, promoCode);
         }
 
         log.info("[Webhook] Zakup produktu '{}' dla gracza '{}' na serwerze '{}'.",

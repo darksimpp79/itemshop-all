@@ -62,7 +62,11 @@ public class CleanupScheduler {
     @Scheduled(fixedDelay = 3_600_000) // co 1h
     @Transactional
     public void downgradeExpiredProAccounts() {
-        var expired = ownerRepository.findBySubscriptionPlanAndSubscriptionExpiresAtBefore("PRO", LocalDateTime.now());
+        var now = LocalDateTime.now();
+        var expiredPro     = ownerRepository.findBySubscriptionPlanAndSubscriptionExpiresAtBefore("PRO",     now);
+        var expiredStarter = ownerRepository.findBySubscriptionPlanAndSubscriptionExpiresAtBefore("STARTER", now);
+        var expired = new java.util.ArrayList<>(expiredPro);
+        expired.addAll(expiredStarter);
         if (expired.isEmpty()) return;
         for (var owner : expired) {
             owner.setSubscriptionPlan("FREE");

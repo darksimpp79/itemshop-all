@@ -9,8 +9,14 @@ load: POSTWORLD
 
 commands:
   magazyn:
-    description: Zarzadzanie ItemShopem (odbior i przeladowanie)
-    usage: /magazyn [reload|help]
+    description: Odbierz zakupione przedmioty z magazynu
+    usage: /magazyn [nick|reload|help]
+  punkty:
+    description: Sprawdz swoje Punkty Chwaly
+    usage: /punkty [nick]
+  skrzynka:
+    description: Otworz skrzynke za 500 Punktow Chwaly
+    usage: /skrzynka
 
 permissions:
   itemshop.admin:

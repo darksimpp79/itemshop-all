@@ -36,6 +36,7 @@ public class AdminController {
     @Autowired private ShopModeRepository shopModeRepository;
     @Autowired private pl.ziutek.itemshop.service.DnsVerificationService dnsVerificationService;
     @Autowired private pl.ziutek.itemshop.repository.LootboxRewardRepository lootboxRewardRepository;
+    @Autowired private pl.ziutek.itemshop.repository.PromoCodeRepository promoCodeRepository;
     @Autowired private CacheManager cacheManager;
 
     // ══ SKLEP ══
@@ -47,9 +48,10 @@ public class AdminController {
                 .orElseThrow(() -> new RuntimeException("Błąd autoryzacji!"));
 
         List<Shop> existingShops = shopRepository.findByOwnerEmail(ownerEmail);
-        if ("FREE".equals(owner.getSubscriptionPlan()) && existingShops.size() >= 1) {
+        String plan = owner.getSubscriptionPlan();
+        if (!"PRO".equals(plan) && existingShops.size() >= 1) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Limit 1 sklepu dla planu FREE. Odblokuj PRO, aby tworzyć bez limitów.");
+                    .body("Plan " + plan + " pozwala na 1 sklep. Odblokuj PRO, aby tworzyć bez limitów.");
         }
 
         // Zapytanie DB zamiast findAll() — zero ładowania wszystkich sklepów do RAM
@@ -80,9 +82,15 @@ public class AdminController {
     @PutMapping("/sklep/motyw")
     public ResponseEntity<?> updateShopTheme(@RequestHeader("X-API-Key") String apiKey, @RequestParam String theme) {
         return withOwnedShop(apiKey, shop -> {
-            if ("FREE".equals(shop.getOwner().getSubscriptionPlan()) && !"default".equals(theme)) {
+            String ownerPlan = shop.getOwner().getSubscriptionPlan();
+            boolean themeAllowed = switch (ownerPlan) {
+                case "PRO" -> true;
+                case "STARTER" -> List.of("default","dark","forest","ocean").contains(theme);
+                default -> "default".equals(theme);
+            };
+            if (!themeAllowed) {
                 return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                        .body("Motywy premium są zarezerwowane dla planu PRO.");
+                        .body("Motyw '" + theme + "' niedostępny w planie " + ownerPlan + ".");
             }
             shop.setTheme(theme);
             shopRepository.save(shop);
@@ -358,12 +366,16 @@ public class AdminController {
     @PostMapping("/tryb")
     public ResponseEntity<?> saveShopMode(@RequestHeader("X-API-Key") String apiKey, @RequestBody ShopMode mode) {
         return withOwnedShop(apiKey, shop -> {
-            if ("FREE".equals(shop.getOwner().getSubscriptionPlan())) {
-                List<ShopMode> existing = shopModeRepository.findByShop(shop);
-                if (mode.getId() == null && existing.size() >= 1) {
-                    return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                            .body("Plan FREE pozwala tylko na 1 tryb gry.");
-                }
+            String modePlan = shop.getOwner().getSubscriptionPlan();
+            List<ShopMode> existingModes = shopModeRepository.findByShop(shop);
+            int modeLimit = switch (modePlan) {
+                case "PRO" -> Integer.MAX_VALUE;
+                case "STARTER" -> 5;
+                default -> 1; // FREE
+            };
+            if (mode.getId() == null && existingModes.size() >= modeLimit) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Plan " + modePlan + " pozwala na max " + modeLimit + " tryb(ów) gry.");
             }
             mode.setShop(shop);
             shopModeRepository.save(mode);
@@ -533,6 +545,91 @@ public class AdminController {
             
             lootboxRewardRepository.delete(reward);
             return ResponseEntity.ok("Usunięto nagrodę.");
+        });
+    }
+
+    // ══ PROMO KODY ══
+
+    @GetMapping("/kody-promo")
+    public ResponseEntity<?> getPromoCodes(
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        return withOwnedShop(apiKey, shop ->
+                ResponseEntity.ok(promoCodeRepository.findByShopOrderByCreatedAtDesc(shop)));
+    }
+
+    @PostMapping("/kod-promo")
+    public ResponseEntity<?> addPromoCode(
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam,
+            @RequestBody Map<String, Object> req
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+
+        return withOwnedShop(apiKey, shop -> {
+            String code = req.get("code") != null ? req.get("code").toString().trim().toUpperCase() : null;
+            if (code == null || code.isEmpty() || !code.matches("[A-Z0-9_-]{2,30}"))
+                return ResponseEntity.badRequest().body("Nieprawidłowy kod (2–30 znaków, litery/cyfry/-/_).");
+
+            if (promoCodeRepository.findByShopAndCodeIgnoreCase(shop, code).isPresent())
+                return ResponseEntity.badRequest().body("Kod '" + code + "' już istnieje w tym sklepie.");
+
+            int discount;
+            try { discount = Integer.parseInt(req.get("discountPercent").toString()); }
+            catch (Exception e) { return ResponseEntity.badRequest().body("Nieprawidłowy procent zniżki."); }
+            if (discount < 1 || discount > 100) return ResponseEntity.badRequest().body("Zniżka musi być 1–100%.");
+
+            pl.ziutek.itemshop.model.PromoCode pc = new pl.ziutek.itemshop.model.PromoCode();
+            pc.setShop(shop);
+            pc.setCode(code);
+            pc.setDiscountPercent(discount);
+            if (req.get("maxUses") != null) {
+                try { pc.setMaxUses(Integer.parseInt(req.get("maxUses").toString())); } catch (Exception ignored) {}
+            }
+            if (req.get("expiresAt") != null && !req.get("expiresAt").toString().isBlank()) {
+                try { pc.setExpiresAt(LocalDateTime.parse(req.get("expiresAt").toString())); } catch (Exception ignored) {}
+            }
+            return ResponseEntity.ok(promoCodeRepository.save(pc));
+        });
+    }
+
+    @PatchMapping("/kod-promo/{id}/toggle")
+    public ResponseEntity<?> togglePromoCode(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        return withOwnedShop(apiKey, shop -> {
+            pl.ziutek.itemshop.model.PromoCode pc = promoCodeRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Nie znaleziono kodu"));
+            if (!pc.getShop().getId().equals(shop.getId()))
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Kod nie należy do tego sklepu.");
+            pc.setActive(!pc.isActive());
+            return ResponseEntity.ok(promoCodeRepository.save(pc));
+        });
+    }
+
+    @DeleteMapping("/kod-promo/{id}")
+    public ResponseEntity<?> deletePromoCode(
+            @PathVariable Long id,
+            @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
+            @RequestParam(value = "apiKey", required = false) String apiKeyParam
+    ) {
+        String apiKey = resolveApiKey(apiKeyHeader, apiKeyParam);
+        if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
+        return withOwnedShop(apiKey, shop -> {
+            pl.ziutek.itemshop.model.PromoCode pc = promoCodeRepository.findById(id)
+                    .orElseThrow(() -> new RuntimeException("Nie znaleziono kodu"));
+            if (!pc.getShop().getId().equals(shop.getId()))
+                return ResponseEntity.status(HttpStatus.FORBIDDEN).body("Kod nie należy do tego sklepu.");
+            promoCodeRepository.delete(pc);
+            return ResponseEntity.ok("Usunięto kod.");
         });
     }
 }

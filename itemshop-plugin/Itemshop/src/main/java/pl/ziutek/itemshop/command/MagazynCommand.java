@@ -46,20 +46,26 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
 
     private final String GUI_MAIN    = ChatColor.DARK_GREEN + "Twój Magazyn";
     private final String GUI_CONFIRM = ChatColor.DARK_BLUE  + "Potwierdź odbiór";
+    private static final String GUI_ADMIN_PREFIX = ChatColor.GOLD + "[ADMIN] ";
 
     private final NamespacedKey idsKey;
     private final NamespacedKey cmdsKey;
     private final NamespacedKey nameKey;
     private final NamespacedKey slotsKey;
     private final NamespacedKey sigKey;
+    private final NamespacedKey targetKey; // nick gracza, dla którego otwarto GUI
+
+    // admin UUID → nick gracza (czyj magazyn przegląda)
+    private final Map<java.util.UUID, String> adminViewingFor = new HashMap<>();
 
     public MagazynCommand(Plugin plugin) {
-        this.plugin  = plugin;
-        this.idsKey  = new NamespacedKey(plugin, "reward_ids");
-        this.cmdsKey = new NamespacedKey(plugin, "reward_cmds");
-        this.nameKey = new NamespacedKey(plugin, "reward_name");
-        this.slotsKey = new NamespacedKey(plugin, "reward_slots");
-        this.sigKey  = new NamespacedKey(plugin, "reward_sig");
+        this.plugin     = plugin;
+        this.idsKey    = new NamespacedKey(plugin, "reward_ids");
+        this.cmdsKey   = new NamespacedKey(plugin, "reward_cmds");
+        this.nameKey   = new NamespacedKey(plugin, "reward_name");
+        this.slotsKey  = new NamespacedKey(plugin, "reward_slots");
+        this.sigKey    = new NamespacedKey(plugin, "reward_sig");
+        this.targetKey = new NamespacedKey(plugin, "reward_target");
 
         zaladujConfig();
     }
@@ -92,6 +98,11 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
                 wyslijPomoc(sender);
                 return true;
             }
+            // /magazyn <nick> — admin przegląda magazyn innego gracza
+            if (!sender.hasPermission("itemshop.admin")) {
+                sender.sendMessage(ChatColor.RED + "Brak uprawnień do przeglądania cudzego magazynu!");
+                return true;
+            }
         }
 
         if (!(sender instanceof Player player)) {
@@ -99,9 +110,16 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
             return true;
         }
 
-        player.sendMessage(ChatColor.YELLOW + "Ładuję dane z magazynu...");
+        String targetNick = (args.length > 0) ? args[0] : player.getName();
+        boolean isAdminView = !targetNick.equalsIgnoreCase(player.getName());
 
-        String requestUrl = API_URL + player.getName() + "?mode=" + SERVER_MODE;
+        if (isAdminView) {
+            player.sendMessage(ChatColor.GOLD + "[ADMIN] " + ChatColor.GRAY + "Ładuję magazyn gracza " + ChatColor.YELLOW + targetNick + ChatColor.GRAY + "...");
+        } else {
+            player.sendMessage(ChatColor.YELLOW + "Ładuję dane z magazynu...");
+        }
+
+        String requestUrl = API_URL + targetNick + "?mode=" + SERVER_MODE;
 
         HttpRequest request = HttpRequest.newBuilder()
                 .uri(URI.create(requestUrl))
@@ -110,10 +128,12 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
                 .GET()
                 .build();
 
+        final String finalTargetNick = targetNick;
+        final boolean finalIsAdminView = isAdminView;
         httpClient.sendAsync(request, HttpResponse.BodyHandlers.ofString())
                 .thenAccept(response -> {
                     if (response.statusCode() == 200) {
-                        otworzGlowneGui(player, response.body());
+                        otworzGlowneGui(player, response.body(), finalTargetNick, finalIsAdminView);
                     } else if (response.statusCode() == 401) {
                         player.sendMessage(ChatColor.RED + "Błąd autoryzacji (zły API-KEY w configu).");
                     } else {
@@ -128,12 +148,16 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
         return true;
     }
 
-    private void otworzGlowneGui(Player player, String jsonBody) {
+    private void otworzGlowneGui(Player player, String jsonBody, String targetNick, boolean isAdminView) {
         List<MagazynItem> items = gson.fromJson(jsonBody, new TypeToken<List<MagazynItem>>() {}.getType());
 
         if (items == null || items.isEmpty()) {
-            player.sendMessage(plugin.getConfig().getString("messages.nothing-to-collect",
-                    ChatColor.RED + "Brak przedmiotów.").replace("&", "§"));
+            if (isAdminView) {
+                player.sendMessage(ChatColor.GOLD + "[ADMIN] " + ChatColor.GRAY + "Gracz " + ChatColor.YELLOW + targetNick + ChatColor.GRAY + " nie ma nic w magazynie.");
+            } else {
+                player.sendMessage(plugin.getConfig().getString("messages.nothing-to-collect",
+                        ChatColor.RED + "Brak przedmiotów.").replace("&", "§"));
+            }
             return;
         }
 
@@ -143,7 +167,10 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
         }
 
         Bukkit.getScheduler().runTask(plugin, () -> {
-            Inventory inv = Bukkit.createInventory(null, 27, GUI_MAIN);
+            String title = isAdminView
+                    ? GUI_ADMIN_PREFIX + ChatColor.YELLOW + targetNick
+                    : GUI_MAIN;
+            Inventory inv = Bukkit.createInventory(null, 27, title);
 
             for (Map.Entry<String, List<MagazynItem>> entry : groupedItems.entrySet()) {
                 String itemName        = entry.getKey();
@@ -154,47 +181,58 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
                 int requiredSlots = group.get(0).requiredSlots;
                 String sig        = group.get(0).signature;
 
-                ItemStack icon = new ItemStack(Material.CHEST);
+                ItemStack icon = new ItemStack(isAdminView ? Material.ENDER_CHEST : Material.CHEST);
                 ItemMeta meta  = icon.getItemMeta();
                 if (meta == null) continue;
 
                 meta.setDisplayName(ChatColor.GOLD + "" + ChatColor.BOLD + itemName);
-                meta.setLore(List.of(
+                List<String> lore = new ArrayList<>(List.of(
                         ChatColor.DARK_GRAY + "Ilość w pakiecie: " + ChatColor.AQUA + cmds.size(),
                         "",
                         ChatColor.GRAY + "Wymagane wolne sloty: " + ChatColor.WHITE + requiredSlots,
-                        "",
-                        ChatColor.GREEN + "▶ Kliknij, aby odebrać!"
+                        ""
                 ));
+                if (isAdminView) {
+                    lore.add(ChatColor.GOLD + "▶ Kliknij, aby dostarczyć graczowi " + targetNick + "!");
+                } else {
+                    lore.add(ChatColor.GREEN + "▶ Kliknij, aby odebrać!");
+                }
+                meta.setLore(lore);
 
-                meta.getPersistentDataContainer().set(idsKey,  PersistentDataType.STRING,  gson.toJson(ids));
-                meta.getPersistentDataContainer().set(cmdsKey, PersistentDataType.STRING,  gson.toJson(cmds));
-                meta.getPersistentDataContainer().set(nameKey, PersistentDataType.STRING,  itemName);
-                meta.getPersistentDataContainer().set(slotsKey, PersistentDataType.INTEGER, requiredSlots);
+                meta.getPersistentDataContainer().set(idsKey,    PersistentDataType.STRING,  gson.toJson(ids));
+                meta.getPersistentDataContainer().set(cmdsKey,   PersistentDataType.STRING,  gson.toJson(cmds));
+                meta.getPersistentDataContainer().set(nameKey,   PersistentDataType.STRING,  itemName);
+                meta.getPersistentDataContainer().set(slotsKey,  PersistentDataType.INTEGER, requiredSlots);
+                meta.getPersistentDataContainer().set(targetKey, PersistentDataType.STRING,  targetNick);
                 if (sig != null) meta.getPersistentDataContainer().set(sigKey, PersistentDataType.STRING, sig);
 
                 icon.setItemMeta(meta);
                 inv.addItem(icon);
             }
+            if (isAdminView) adminViewingFor.put(player.getUniqueId(), targetNick);
             player.openInventory(inv);
         });
     }
 
     private void otworzGuiPotwierdzenia(Player player, String idsJson, String cmdsJson,
-                                        String itemName, int requiredSlots, String signature) {
-        Inventory inv = Bukkit.createInventory(null, 27, GUI_CONFIRM);
+                                        String itemName, int requiredSlots, String signature, String targetNick) {
+        boolean isAdminView = !targetNick.equalsIgnoreCase(player.getName());
+        String title = isAdminView ? GUI_ADMIN_PREFIX + ChatColor.YELLOW + "Potwierdź dostarczenie" : GUI_CONFIRM;
+        Inventory inv = Bukkit.createInventory(null, 27, title);
 
         ItemStack acceptBtn  = new ItemStack(Material.LIME_STAINED_GLASS_PANE);
         ItemMeta  acceptMeta = acceptBtn.getItemMeta();
-        acceptMeta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + "✔ POTWIERDŹ ODBIÓR");
+        acceptMeta.setDisplayName(ChatColor.GREEN + "" + ChatColor.BOLD + (isAdminView ? "✔ DOSTARCZ GRACZOWI" : "✔ POTWIERDŹ ODBIÓR"));
         acceptMeta.setLore(List.of(
-                ChatColor.GRAY + "Pakiet: "         + ChatColor.GOLD  + itemName,
-                ChatColor.GRAY + "Wymagane miejsce: " + ChatColor.WHITE + requiredSlots
+                ChatColor.GRAY + "Pakiet: "           + ChatColor.GOLD  + itemName,
+                isAdminView ? ChatColor.GRAY + "Gracz: " + ChatColor.YELLOW + targetNick
+                            : ChatColor.GRAY + "Wymagane miejsce: " + ChatColor.WHITE + requiredSlots
         ));
-        acceptMeta.getPersistentDataContainer().set(idsKey,   PersistentDataType.STRING,  idsJson);
-        acceptMeta.getPersistentDataContainer().set(cmdsKey,  PersistentDataType.STRING,  cmdsJson);
-        acceptMeta.getPersistentDataContainer().set(slotsKey, PersistentDataType.INTEGER, requiredSlots);
-        acceptMeta.getPersistentDataContainer().set(nameKey,  PersistentDataType.STRING,  itemName);
+        acceptMeta.getPersistentDataContainer().set(idsKey,    PersistentDataType.STRING,  idsJson);
+        acceptMeta.getPersistentDataContainer().set(cmdsKey,   PersistentDataType.STRING,  cmdsJson);
+        acceptMeta.getPersistentDataContainer().set(slotsKey,  PersistentDataType.INTEGER, requiredSlots);
+        acceptMeta.getPersistentDataContainer().set(nameKey,   PersistentDataType.STRING,  itemName);
+        acceptMeta.getPersistentDataContainer().set(targetKey, PersistentDataType.STRING,  targetNick);
         if (signature != null) acceptMeta.getPersistentDataContainer().set(sigKey, PersistentDataType.STRING, signature);
         acceptBtn.setItemMeta(acceptMeta);
 
@@ -212,7 +250,9 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         String title = event.getView().getTitle();
-        if (!title.equals(GUI_MAIN) && !title.equals(GUI_CONFIRM)) return;
+        boolean isMain    = title.equals(GUI_MAIN) || title.startsWith(GUI_ADMIN_PREFIX);
+        boolean isConfirm = title.equals(GUI_CONFIRM) || (title.startsWith(GUI_ADMIN_PREFIX) && title.contains("Potwierdź"));
+        if (!isMain && !isConfirm) return;
 
         event.setCancelled(true);
         ItemStack clickedItem = event.getCurrentItem();
@@ -222,27 +262,34 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
 
         Player player = (Player) event.getWhoClicked();
 
-        if (title.equals(GUI_MAIN)) {
+        if (isMain) {
             if (meta.getPersistentDataContainer().has(idsKey, PersistentDataType.STRING)) {
-                String ids  = meta.getPersistentDataContainer().get(idsKey,  PersistentDataType.STRING);
-                String cmds = meta.getPersistentDataContainer().get(cmdsKey, PersistentDataType.STRING);
-                String name = meta.getPersistentDataContainer().get(nameKey, PersistentDataType.STRING);
-                int slots   = meta.getPersistentDataContainer().get(slotsKey, PersistentDataType.INTEGER);
-                String sig  = meta.getPersistentDataContainer().has(sigKey, PersistentDataType.STRING)
+                String ids    = meta.getPersistentDataContainer().get(idsKey,    PersistentDataType.STRING);
+                String cmds   = meta.getPersistentDataContainer().get(cmdsKey,   PersistentDataType.STRING);
+                String name   = meta.getPersistentDataContainer().get(nameKey,   PersistentDataType.STRING);
+                int slots     = meta.getPersistentDataContainer().get(slotsKey,  PersistentDataType.INTEGER);
+                String target = meta.getPersistentDataContainer().has(targetKey, PersistentDataType.STRING)
+                        ? meta.getPersistentDataContainer().get(targetKey, PersistentDataType.STRING) : player.getName();
+                String sig    = meta.getPersistentDataContainer().has(sigKey, PersistentDataType.STRING)
                         ? meta.getPersistentDataContainer().get(sigKey, PersistentDataType.STRING) : null;
 
-                otworzGuiPotwierdzenia(player, ids, cmds, name, slots, sig);
+                otworzGuiPotwierdzenia(player, ids, cmds, name, slots, sig, target);
             }
-        } else if (title.equals(GUI_CONFIRM)) {
+        } else if (isConfirm) {
 
             if (clickedItem.getType() == Material.RED_STAINED_GLASS_PANE) {
                 player.closeInventory();
                 player.sendMessage(ChatColor.GRAY + "Anulowano odbiór.");
 
             } else if (clickedItem.getType() == Material.LIME_STAINED_GLASS_PANE) {
-                int wymagane = meta.getPersistentDataContainer().get(slotsKey, PersistentDataType.INTEGER);
+                int wymagane    = meta.getPersistentDataContainer().get(slotsKey,  PersistentDataType.INTEGER);
+                String target   = meta.getPersistentDataContainer().has(targetKey, PersistentDataType.STRING)
+                        ? meta.getPersistentDataContainer().get(targetKey, PersistentDataType.STRING) : player.getName();
+                boolean adminOp = !target.equalsIgnoreCase(player.getName());
 
-                if (policzWolneKratki(player) < wymagane) {
+                // Sprawdź sloty tylko dla gracza odbierającego dla siebie;
+                // admin dostarcza komendy konsolą — gracz nie musi mieć miejsca w tej chwili
+                if (!adminOp && policzWolneKratki(player) < wymagane) {
                     player.sendMessage(plugin.getConfig().getString("messages.no-slots",
                             "&cBrak miejsca!").replace("&", "§"));
                     return;
@@ -258,13 +305,13 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
                 List<String> cmds = gson.fromJson(cmdsJson, new TypeToken<List<String>>(){}.getType());
 
                 player.closeInventory();
+                adminViewingFor.remove(player.getUniqueId());
 
                 List<String> allowPrefixes = plugin.getConfig().getStringList("allowed-command-prefixes");
-                // ZMIANA: pusta lista = blokuj wszystko (poprzednio pusta = wildcard — niebezpieczne)
                 boolean isWildcard = allowPrefixes.contains("*");
 
                 for (String cmd : cmds) {
-                    String finalCmd = cmd.replace("{player}", player.getName()).trim();
+                    String finalCmd = cmd.replace("{player}", target).trim();
 
                     boolean allowed = isWildcard || allowPrefixes.stream()
                             .anyMatch(p -> !p.isBlank() && finalCmd.toLowerCase().startsWith(p.toLowerCase()));
@@ -277,19 +324,21 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
                     }
                 }
 
-                String successMsg = plugin.getConfig().getString("messages.bought-success",
-                        "&aOdebrano: &f{item}").replace("&", "§").replace("{item}", itemName);
-                player.sendTitle(ChatColor.GOLD + "ODEBRANO!", ChatColor.YELLOW + itemName, 10, 70, 20);
-                player.sendMessage(successMsg);
+                if (adminOp) {
+                    player.sendMessage(ChatColor.GOLD + "[ADMIN] " + ChatColor.GREEN + "Dostarczono " + ChatColor.WHITE + itemName + ChatColor.GREEN + " graczowi " + ChatColor.YELLOW + target + ChatColor.GREEN + "!");
+                } else {
+                    String successMsg = plugin.getConfig().getString("messages.bought-success",
+                            "&aOdebrano: &f{item}").replace("&", "§").replace("{item}", itemName);
+                    player.sendTitle(ChatColor.GOLD + "ODEBRANO!", ChatColor.YELLOW + itemName, 10, 70, 20);
+                    player.sendMessage(successMsg);
+                }
 
-                // ZMIANA: broadcast tylko jeśli włączony w configu (domyślnie false)
-                if (plugin.getConfig().getBoolean("broadcast-purchases", false)) {
+                if (!adminOp && plugin.getConfig().getBoolean("broadcast-purchases", false)) {
                     Bukkit.broadcastMessage(ChatColor.AQUA + "ITEMSHOP > "
-                            + ChatColor.GRAY + player.getName() + " odebrał "
+                            + ChatColor.GRAY + target + " odebrał "
                             + ChatColor.GOLD + itemName + " (" + SERVER_MODE + ")");
                 }
 
-                // ZMIANA: obsługa błędów przy oznaczaniu — zapobiega podwójnemu odbiorowi
                 for (Long id : ids) oznaczJakoOdebrane(id, sig, player);
             }
         }
@@ -360,8 +409,12 @@ public class MagazynCommand implements CommandExecutor, Listener, TabCompleter {
         if (args.length == 1) {
             List<String> list = new ArrayList<>();
             list.add("help");
-            if (sender.hasPermission("itemshop.admin")) list.add("reload");
-            return list.stream().filter(s -> s.startsWith(args[0].toLowerCase())).toList();
+            if (sender.hasPermission("itemshop.admin")) {
+                list.add("reload");
+                // nicki online graczy dla /magazyn <nick>
+                Bukkit.getOnlinePlayers().forEach(p -> list.add(p.getName()));
+            }
+            return list.stream().filter(s -> s.toLowerCase().startsWith(args[0].toLowerCase())).toList();
         }
         return new ArrayList<>();
     }
