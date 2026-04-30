@@ -1,0 +1,30 @@
+@import "tailwindcss";
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+
+/* app/globals.css */
+@keyframes marquee { from { transform: translateX(0) } to { transform: translateX(-50%) } }
+@keyframes float { 0%,100% { transform: translateY(0px) rotate(0deg) } 50% { transform: translateY(-16px) rotate(2deg) } }
+@keyframes glow-pulse { 0%,100% { opacity: 0.4 } 50% { opacity: 0.8 } }
+@keyframes scan { 0% { transform: translateY(-100%) } 100% { transform: translateY(100vh) } }
+
+.float { animation: float 6s ease-in-out infinite; }
+.glow-pulse { animation: glow-pulse 3s ease-in-out infinite; }
+.grid-bg { 
+  background-image: linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px), 
+                    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px); 
+  background-size: 60px 60px; 
+}
+.noise::after { 
+  content: ''; 
+  position: absolute; 
+  inset: 0; 
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.03'/%3E%3C/svg%3E"); 
+  pointer-events: none; 
+}
+.text-stroke { -webkit-text-stroke: 1px rgba(255,255,255,0.15); color: transparent; }
+.card-hover { transition: transform 0.3s cubic-bezier(.34,1.56,.64,1), border-color 0.3s; }
+.card-hover:hover { transform: translateY(-6px) scale(1.01); }

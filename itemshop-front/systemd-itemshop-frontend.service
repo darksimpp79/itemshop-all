@@ -1,0 +1,19 @@
+[Unit]
+Description=ItemShop Frontend (Next.js)
+After=network.target
+
+[Service]
+Type=simple
+User=ola
+WorkingDirectory=/home/ola/Documents/moje-pluginy/itemshop-all/itemshop-front
+EnvironmentFile=/home/ola/Documents/moje-pluginy/itemshop-all/itemshop-front/.env.production
+ExecStart=/usr/bin/npm start
+Restart=on-failure
+RestartSec=10
+
+# Security
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
