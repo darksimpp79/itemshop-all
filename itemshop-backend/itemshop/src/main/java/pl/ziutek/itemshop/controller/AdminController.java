@@ -49,9 +49,14 @@ public class AdminController {
 
         List<Shop> existingShops = shopRepository.findByOwnerEmail(ownerEmail);
         String plan = owner.getSubscriptionPlan();
-        if (!"PRO".equals(plan) && existingShops.size() >= 1) {
+        int shopLimit = switch (plan) {
+            case "PRO" -> Integer.MAX_VALUE;
+            case "STARTER" -> 3;
+            default -> 1;
+        };
+        if (existingShops.size() >= shopLimit) {
             return ResponseEntity.status(HttpStatus.FORBIDDEN)
-                    .body("Plan " + plan + " pozwala na 1 sklep. Odblokuj PRO, aby tworzyć bez limitów.");
+                    .body("Plan " + plan + " pozwala na max " + shopLimit + " sklep(y). Ulepsz plan, aby dodać więcej.");
         }
 
         // Zapytanie DB zamiast findAll() — zero ładowania wszystkich sklepów do RAM
@@ -161,6 +166,17 @@ public class AdminController {
     @PostMapping("/produkt")
     public ResponseEntity<?> dodajProdukt(@RequestHeader("X-API-Key") String apiKey, @RequestBody Product product) {
         return withOwnedShop(apiKey, shop -> {
+            String prodPlan = shop.getOwner().getSubscriptionPlan();
+            int prodLimit = switch (prodPlan) {
+                case "PRO" -> Integer.MAX_VALUE;
+                case "STARTER" -> 30;
+                default -> 5;
+            };
+            long currentCount = productRepository.countByShop(shop);
+            if (currentCount >= prodLimit) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Plan " + prodPlan + " pozwala na max " + prodLimit + " produktów. Ulepsz plan, aby dodać więcej.");
+            }
             product.setShop(shop);
             productRepository.save(product);
             evictShopProductCache(shop);
@@ -370,7 +386,7 @@ public class AdminController {
             List<ShopMode> existingModes = shopModeRepository.findByShop(shop);
             int modeLimit = switch (modePlan) {
                 case "PRO" -> Integer.MAX_VALUE;
-                case "STARTER" -> 5;
+                case "STARTER" -> 3;
                 default -> 1; // FREE
             };
             if (mode.getId() == null && existingModes.size() >= modeLimit) {
@@ -435,7 +451,12 @@ public class AdminController {
         if (!shopOpt.get().getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
             return ResponseEntity.status(403).body("Brak dostępu do tego sklepu!");
         }
-        return action.apply(shopOpt.get());
+        try {
+            return action.apply(shopOpt.get());
+        } catch (Exception e) {
+            log.error("[Admin] Błąd operacji: {}", e.getMessage(), e);
+            return ResponseEntity.status(500).body("Błąd serwera: " + e.getMessage());
+        }
     }
 
     private Map<String, Double> buildPriceMap(List<Product> products) {
@@ -512,6 +533,11 @@ public class AdminController {
         if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
         
         return withOwnedShop(apiKey, shop -> {
+            String lootPlan = shop.getOwner().getSubscriptionPlan();
+            if ("FREE".equals(lootPlan)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Lootbox dostępny od planu STARTER.");
+            }
             if (req.getName() == null || req.getName().isBlank() || req.getCommand() == null || req.getCommand().isBlank()) {
                 return ResponseEntity.badRequest().body("Nazwa i komenda są wymagane.");
             }
@@ -571,6 +597,11 @@ public class AdminController {
         if (apiKey == null) return ResponseEntity.status(401).body("Brak klucza API!");
 
         return withOwnedShop(apiKey, shop -> {
+            String promoPlan = shop.getOwner().getSubscriptionPlan();
+            if ("FREE".equals(promoPlan)) {
+                return ResponseEntity.status(HttpStatus.FORBIDDEN)
+                        .body("Kody promo dostępne od planu STARTER.");
+            }
             String code = req.get("code") != null ? req.get("code").toString().trim().toUpperCase() : null;
             if (code == null || code.isEmpty() || !code.matches("[A-Z0-9_-]{2,30}"))
                 return ResponseEntity.badRequest().body("Nieprawidłowy kod (2–30 znaków, litery/cyfry/-/_).");
@@ -591,7 +622,18 @@ public class AdminController {
                 try { pc.setMaxUses(Integer.parseInt(req.get("maxUses").toString())); } catch (Exception ignored) {}
             }
             if (req.get("expiresAt") != null && !req.get("expiresAt").toString().isBlank()) {
-                try { pc.setExpiresAt(LocalDateTime.parse(req.get("expiresAt").toString())); } catch (Exception ignored) {}
+                try {
+                    String raw = req.get("expiresAt").toString();
+                    LocalDateTime parsed;
+                    try {
+                        parsed = LocalDateTime.parse(raw);
+                    } catch (Exception e1) {
+                        // HTML datetime-local daje format bez sekund: "2024-01-15T14:30"
+                        parsed = LocalDateTime.parse(raw,
+                            java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm"));
+                    }
+                    pc.setExpiresAt(parsed);
+                } catch (Exception ignored) {}
             }
             return ResponseEntity.ok(promoCodeRepository.save(pc));
         });

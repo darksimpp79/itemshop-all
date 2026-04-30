@@ -106,20 +106,25 @@ public class StorefrontController {
         Optional<pl.ziutek.itemshop.model.Shop> shopOpt = shopRepository.findByServerNameIgnoreCase(serverName);
         if (shopOpt.isEmpty()) return ResponseEntity.notFound().build();
 
-        return promoCodeRepository.findByShopAndCodeIgnoreCase(shopOpt.get(), code)
-                .<ResponseEntity<?>>map(pc -> {
-                    if (!pc.isActive()) return ResponseEntity.badRequest().body("Kod jest nieaktywny.");
-                    if (pc.getExpiresAt() != null && pc.getExpiresAt().isBefore(java.time.LocalDateTime.now()))
-                        return ResponseEntity.badRequest().body("Kod wygasł.");
-                    if (pc.getMaxUses() != null && pc.getCurrentUses() >= pc.getMaxUses())
-                        return ResponseEntity.badRequest().body("Kod został już wykorzystany.");
-                    return ResponseEntity.ok(java.util.Map.of(
-                            "valid", true,
-                            "discountPercent", pc.getDiscountPercent(),
-                            "code", pc.getCode().toUpperCase()
-                    ));
-                })
-                .orElse(ResponseEntity.badRequest().body("Nieprawidłowy kod promocyjny."));
+        try {
+            return promoCodeRepository.findByShopAndCodeIgnoreCase(shopOpt.get(), code)
+                    .<ResponseEntity<?>>map(pc -> {
+                        if (!pc.isActive()) return ResponseEntity.badRequest().body("Kod jest nieaktywny.");
+                        if (pc.getExpiresAt() != null && pc.getExpiresAt().isBefore(java.time.LocalDateTime.now()))
+                            return ResponseEntity.badRequest().body("Kod wygasł.");
+                        if (pc.getMaxUses() != null && pc.getCurrentUses() >= pc.getMaxUses())
+                            return ResponseEntity.badRequest().body("Kod został już wykorzystany.");
+                        return ResponseEntity.ok(java.util.Map.of(
+                                "valid", true,
+                                "discountPercent", pc.getDiscountPercent(),
+                                "code", pc.getCode().toUpperCase()
+                        ));
+                    })
+                    .orElse(ResponseEntity.badRequest().body("Nieprawidłowy kod promocyjny."));
+        } catch (Exception e) {
+            log.error("[Storefront] Błąd walidacji kodu promo dla {}: {}", serverName, e.getMessage(), e);
+            return ResponseEntity.status(500).body("Błąd serwera przy walidacji kodu.");
+        }
     }
 
     @PostMapping("/{serverName}/checkout")

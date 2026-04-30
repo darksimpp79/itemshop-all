@@ -151,8 +151,8 @@ public class PaymentController {
         String email = SecurityContextHolder.getContext().getAuthentication().getName();
 
         return ownerRepository.findByEmail(email).<ResponseEntity<?>>map(owner -> {
-            if (!"PRO".equals(owner.getSubscriptionPlan())) {
-                return ResponseEntity.badRequest().body("Nie masz aktywnego planu PRO.");
+            if ("FREE".equals(owner.getSubscriptionPlan())) {
+                return ResponseEntity.badRequest().body("Nie masz aktywnej subskrypcji.");
             }
             if (owner.getStripeSubscriptionId() == null) {
                 return ResponseEntity.badRequest().body("Brak ID subskrypcji — skontaktuj się z pomocą techniczną.");
@@ -291,25 +291,33 @@ public class PaymentController {
         Invoice invoice = (Invoice) event.getData().getObject();
         String customerId = invoice.getCustomer();
 
-        // Wyciągamy koniec okresu subskrypcji z pierwszej pozycji faktury
         Long periodEnd = null;
+        String detectedPriceId = null;
         try {
             var lines = invoice.getLines();
             if (lines != null && !lines.getData().isEmpty()) {
-                periodEnd = lines.getData().get(0).getPeriod().getEnd();
+                var line = lines.getData().get(0);
+                periodEnd = line.getPeriod().getEnd();
+                if (line.getPrice() != null) detectedPriceId = line.getPrice().getId();
             }
         } catch (Exception e) {
-            log.warn("[Webhook] Nie udało się wyciągnąć periodEnd z invoice: {}", e.getMessage());
+            log.warn("[Webhook] Nie udało się wyciągnąć danych z invoice: {}", e.getMessage());
         }
 
         final Long finalPeriodEnd = periodEnd;
+        final String finalPriceId = detectedPriceId;
         ownerRepository.findByStripeCustomerId(customerId).ifPresentOrElse(owner -> {
-            owner.setSubscriptionPlan("PRO");
+            // Wykryj plan na podstawie price_id; fallback: zachowaj obecny plan
+            String newPlan = owner.getSubscriptionPlan();
+            if (stripePriceProMonthly.equals(finalPriceId)) newPlan = "PRO";
+            else if (stripePriceStarterMonthly.equals(finalPriceId)) newPlan = "STARTER";
+
+            owner.setSubscriptionPlan(newPlan);
             owner.setSubscriptionExpiresAt(finalPeriodEnd != null
                     ? LocalDateTime.ofInstant(Instant.ofEpochSecond(finalPeriodEnd), ZoneId.systemDefault())
                     : LocalDateTime.now().plusMonths(1));
             ownerRepository.save(owner);
-            log.info("[Webhook] Odnowiono PRO dla customerId={}, wygasa: {}", customerId, owner.getSubscriptionExpiresAt());
+            log.info("[Webhook] Odnowiono {} dla customerId={}, wygasa: {}", newPlan, customerId, owner.getSubscriptionExpiresAt());
         }, () -> log.warn("[Webhook] invoice.payment_succeeded — brak konta dla customerId={}", customerId));
     }
 
