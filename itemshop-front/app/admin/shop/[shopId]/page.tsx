@@ -606,9 +606,12 @@ function ShopPanel({ shopId }: { shopId: number }) {
 
         {/* Plan badge */}
         <div className="p-3 border-t border-white/[0.05]">
-          <div className={`flex items-center justify-between px-3 py-2 rounded-xl ${isPro ? "bg-blue-600/10 border border-blue-500/20" : "bg-white/[0.03] border border-white/[0.05]"}`}>
+          <div className={`flex items-center justify-between px-3 py-2 rounded-xl ${isPro ? "bg-blue-600/10 border border-blue-500/20" : isAtLeastStarter ? "bg-violet-600/10 border border-violet-500/20" : "bg-white/[0.03] border border-white/[0.05]"}`}>
             <span className="text-[10px] font-bold uppercase tracking-widest text-slate-600">{plan}</span>
-            {!isPro && (
+            {plan === "FREE" && (
+              <button onClick={startStarterCheckout} className="text-[9px] font-bold text-violet-400 hover:text-violet-300 transition-colors">Ulepsz →</button>
+            )}
+            {plan === "STARTER" && (
               <button onClick={startProCheckout} className="text-[9px] font-bold text-blue-400 hover:text-blue-300 transition-colors">Ulepsz →</button>
             )}
             {isPro && <span className="text-sm">💎</span>}
@@ -944,40 +947,55 @@ function ShopPanel({ shopId }: { shopId: number }) {
                   <p className="text-xs text-slate-600 mt-0.5 font-medium">Nagrody losowane wazonym algorytmem · koszt 500 pkt</p>
                 </div>
 
-                <div className={card}>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600 mb-5">Dodaj nagrode</p>
-                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
-                    <input type="text" value={lootName} onChange={e => setLootName(e.target.value)} placeholder="Nazwa nagrody" className={inp} />
-                    <div className="md:col-span-2">
-                      <input type="text" value={lootCmd} onChange={e => setLootCmd(e.target.value)} placeholder={`give {player} diamond 5`} className={mono} />
+                {!isAtLeastStarter && (
+                  <div className={`${card} text-center py-10 space-y-4`}>
+                    <div className="text-4xl">⚡</div>
+                    <div>
+                      <h2 className="text-base font-black text-slate-200 mb-1">Lootbox — plan STARTER+</h2>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Losowe nagrody dla graczy za 500 punktów portfela. Dostępne od planu STARTER (9,99 PLN/mies.).</p>
                     </div>
-                    <div className="flex gap-2 items-center">
-                      <input type="number" min="1" value={lootWeight} onChange={e => setLootWeight(e.target.value)} placeholder="Waga" className={`${inp} flex-1`} />
-                      <button onClick={handleAddLoot} className={`${btn} flex-shrink-0`}>+</button>
+                    <button onClick={startStarterCheckout} className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 active:scale-[0.98] rounded-xl text-xs font-bold uppercase tracking-wide transition-all text-white mx-auto block">
+                      ⚡ Ulepsz do STARTER
+                    </button>
+                  </div>
+                )}
+
+                {isAtLeastStarter && (<>
+                  <div className={card}>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600 mb-5">Dodaj nagrode</p>
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                      <input type="text" value={lootName} onChange={e => setLootName(e.target.value)} placeholder="Nazwa nagrody" className={inp} />
+                      <div className="md:col-span-2">
+                        <input type="text" value={lootCmd} onChange={e => setLootCmd(e.target.value)} placeholder={`give {player} diamond 5`} className={mono} />
+                      </div>
+                      <div className="flex gap-2 items-center">
+                        <input type="number" min="1" value={lootWeight} onChange={e => setLootWeight(e.target.value)} placeholder="Waga" className={`${inp} flex-1`} />
+                        <button onClick={handleAddLoot} className={`${btn} flex-shrink-0`}>+</button>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                <div className="space-y-3">
-                  {lootbox.length === 0
-                    ? <div className={`${card} text-center py-8`}>
-                        <span className="text-2xl opacity-20 block mb-2">⊞</span>
-                        <p className="text-xs text-slate-700 font-medium">Brak nagrod w puli. Gracze otrzymaja nagrody domyslne.</p>
-                      </div>
-                    : lootbox.map(r => (
-                      <div key={r.id} className={`${card} flex items-center gap-5 p-4`}>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-semibold text-[14px] text-slate-200">{r.name}</p>
-                          <p className="text-[11px] text-slate-600 font-mono mt-0.5 truncate">{r.command}</p>
+                  <div className="space-y-3">
+                    {lootbox.length === 0
+                      ? <div className={`${card} text-center py-8`}>
+                          <span className="text-2xl opacity-20 block mb-2">⊞</span>
+                          <p className="text-xs text-slate-700 font-medium">Brak nagrod w puli. Gracze otrzymaja nagrody domyslne.</p>
                         </div>
-                        <span className="bg-orange-500/10 text-orange-400 border border-orange-500/15 px-3 py-1 rounded-xl text-[10px] font-bold uppercase flex-shrink-0">
-                          Waga {r.weight}
-                        </span>
-                        <button onClick={() => handleDeleteLoot(r.id)} className="w-8 h-8 bg-[#09090B] hover:bg-red-600 text-slate-600 hover:text-white rounded-lg transition-all text-xs flex items-center justify-center border border-white/[0.06] flex-shrink-0">✕</button>
-                      </div>
-                    ))
-                  }
-                </div>
+                      : lootbox.map(r => (
+                        <div key={r.id} className={`${card} flex items-center gap-5 p-4`}>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold text-[14px] text-slate-200">{r.name}</p>
+                            <p className="text-[11px] text-slate-600 font-mono mt-0.5 truncate">{r.command}</p>
+                          </div>
+                          <span className="bg-orange-500/10 text-orange-400 border border-orange-500/15 px-3 py-1 rounded-xl text-[10px] font-bold uppercase flex-shrink-0">
+                            Waga {r.weight}
+                          </span>
+                          <button onClick={() => handleDeleteLoot(r.id)} className="w-8 h-8 bg-[#09090B] hover:bg-red-600 text-slate-600 hover:text-white rounded-lg transition-all text-xs flex items-center justify-center border border-white/[0.06] flex-shrink-0">✕</button>
+                        </div>
+                      ))
+                    }
+                  </div>
+                </>)}
               </div>
             )}
 
@@ -989,81 +1007,99 @@ function ShopPanel({ shopId }: { shopId: number }) {
                   <p className="text-xs text-slate-600 mt-1">Gracze wpisują kod przy zakupie, aby otrzymać zniżkę.</p>
                 </div>
 
-                {/* Formularz */}
-                <div className={`${card} space-y-4`}>
-                  <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Nowy kod</p>
-                  <div className="grid grid-cols-2 gap-3">
+                {!isAtLeastStarter && (
+                  <div className={`${card} text-center py-10 space-y-4`}>
+                    <div className="text-4xl">⚡</div>
                     <div>
-                      <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Kod</label>
-                      <input className={inp} placeholder="PROMO20" value={promoCode} onChange={e => setPromoCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""))} maxLength={30} />
+                      <h2 className="text-base font-black text-slate-200 mb-1">Kody promocyjne — plan STARTER+</h2>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Utwórz kody zniżkowe dla swoich graczy. Dostępne od planu STARTER (9,99 PLN/mies.).</p>
                     </div>
-                    <div>
-                      <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Zniżka (%)</label>
-                      <input className={inp} type="number" min="1" max="100" placeholder="10" value={promoDiscount} onChange={e => setPromoDiscount(e.target.value)} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Limit użyć (opcja)</label>
-                      <input className={inp} type="number" min="1" placeholder="bez limitu" value={promoMaxUses} onChange={e => setPromoMaxUses(e.target.value)} />
-                    </div>
-                    <div>
-                      <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Wygasa (opcja)</label>
-                      <input className={inp} type="datetime-local" value={promoExpiresAt} onChange={e => setPromoExpiresAt(e.target.value)} />
-                    </div>
+                    <button onClick={startStarterCheckout} className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 active:scale-[0.98] rounded-xl text-xs font-bold uppercase tracking-wide transition-all text-white mx-auto block">
+                      ⚡ Ulepsz do STARTER
+                    </button>
                   </div>
-                  <button className={`${btn} w-full`} onClick={async () => {
-                    if (!promoCode.trim()) { toast("Wpisz kod.", "error"); return; }
-                    const disc = parseInt(promoDiscount);
-                    if (isNaN(disc) || disc < 1 || disc > 100) { toast("Zniżka musi być 1–100%.", "error"); return; }
-                    const body: Record<string, unknown> = { code: promoCode, discountPercent: disc };
-                    if (promoMaxUses) body.maxUses = parseInt(promoMaxUses);
-                    if (promoExpiresAt) body.expiresAt = promoExpiresAt;
-                    const r = await fetch("/api/admin/kod-promo", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}`, "X-API-Key": apiKey },
-                      body: JSON.stringify(body)
-                    });
-                    if (r.ok) { toast("Kod dodany!"); setPromoCode(""); setPromoDiscount("10"); setPromoMaxUses(""); setPromoExpiresAt(""); fetchPromoCodes(apiKey, token!); }
-                    else { toast(await r.text() || "Blad.", "error"); }
-                  }}>
-                    <Plus size={14} /> Dodaj kod
-                  </button>
-                </div>
+                )}
 
-                {/* Lista kodów */}
-                <div className="space-y-2">
-                  {promoCodes.length === 0
-                    ? <div className={`${card} text-center py-8`}>
-                        <span className="text-2xl opacity-20 block mb-2">🏷️</span>
-                        <p className="text-xs text-slate-700 font-medium">Brak kodów promocyjnych. Dodaj pierwszy powyżej.</p>
+                {isAtLeastStarter && (<>
+                  {/* Formularz */}
+                  <div className={`${card} space-y-4`}>
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Nowy kod</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Kod</label>
+                        <input className={inp} placeholder="PROMO20" value={promoCode} onChange={e => setPromoCode(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, ""))} maxLength={30} />
                       </div>
-                    : promoCodes.map(pc => (
-                      <div key={pc.id} className={`${card} flex items-center gap-4 p-4`}>
-                        <code className="bg-black/40 text-[#bbf028] font-mono font-bold text-sm px-3 py-1.5 rounded-lg border border-[#bbf028]/20 flex-shrink-0">
-                          {pc.code}
-                        </code>
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/15 px-2 py-0.5 rounded-lg text-[10px] font-bold">-{pc.discountPercent}%</span>
-                            <span className="text-[10px] text-slate-600">{pc.currentUses}{pc.maxUses ? `/${pc.maxUses}` : ""} użyć</span>
-                            {pc.expiresAt && <span className="text-[10px] text-slate-600">Wygasa: {new Date(pc.expiresAt).toLocaleDateString("pl-PL")}</span>}
-                          </div>
+                      <div>
+                        <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Zniżka (%)</label>
+                        <input className={inp} type="number" min="1" max="100" placeholder="10" value={promoDiscount} onChange={e => setPromoDiscount(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Limit użyć (opcja)</label>
+                        <input className={inp} type="number" min="1" placeholder="bez limitu" value={promoMaxUses} onChange={e => setPromoMaxUses(e.target.value)} />
+                      </div>
+                      <div>
+                        <label className="text-[10px] text-slate-600 uppercase font-bold tracking-widest block mb-1.5">Wygasa (opcja)</label>
+                        <input className={inp} type="datetime-local" value={promoExpiresAt} onChange={e => setPromoExpiresAt(e.target.value)} />
+                      </div>
+                    </div>
+                    <button className={`${btn} w-full`} onClick={async () => {
+                      if (!promoCode.trim()) { toast("Wpisz kod.", "error"); return; }
+                      const disc = parseInt(promoDiscount);
+                      if (isNaN(disc) || disc < 1 || disc > 100) { toast("Zniżka musi być 1–100%.", "error"); return; }
+                      const body: Record<string, unknown> = { code: promoCode, discountPercent: disc };
+                      if (promoMaxUses) body.maxUses = parseInt(promoMaxUses);
+                      if (promoExpiresAt) body.expiresAt = promoExpiresAt;
+                      const t = localStorage.getItem("auth_token")!;
+                      const r = await fetch("/api/admin/kod-promo", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}`, "X-API-Key": apiKey },
+                        body: JSON.stringify(body)
+                      });
+                      if (r.ok) { toast("Kod dodany!"); setPromoCode(""); setPromoDiscount("10"); setPromoMaxUses(""); setPromoExpiresAt(""); fetchPromoCodes(apiKey, t); }
+                      else { toast(await r.text() || "Blad.", "error"); }
+                    }}>
+                      <Plus size={14} /> Dodaj kod
+                    </button>
+                  </div>
+
+                  {/* Lista kodów */}
+                  <div className="space-y-2">
+                    {promoCodes.length === 0
+                      ? <div className={`${card} text-center py-8`}>
+                          <span className="text-2xl opacity-20 block mb-2">🏷️</span>
+                          <p className="text-xs text-slate-700 font-medium">Brak kodów promocyjnych. Dodaj pierwszy powyżej.</p>
                         </div>
-                        <button onClick={async () => {
-                          const r = await fetch(`/api/admin/kod-promo/${pc.id}/toggle`, { method: "PATCH", headers: { Authorization: `Bearer ${token}`, "X-API-Key": apiKey } });
-                          if (r.ok) fetchPromoCodes(apiKey, token!);
-                        }} className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all flex-shrink-0 ${pc.active ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20" : "bg-white/[0.03] text-slate-600 border-white/[0.06] hover:bg-emerald-500/10 hover:text-emerald-400"}`}>
-                          {pc.active ? <><ToggleRight size={12} /> ON</> : <><ToggleLeft size={12} /> OFF</>}
-                        </button>
-                        <button onClick={() => setConfirm({ open: true, message: `Usunąć kod ${pc.code}?`, onConfirm: async () => {
-                          const r = await fetch(`/api/admin/kod-promo/${pc.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}`, "X-API-Key": apiKey } });
-                          if (r.ok) { toast("Kod usuniety."); fetchPromoCodes(apiKey, token!); }
-                        }})} className="w-8 h-8 bg-[#09090B] hover:bg-red-600 text-slate-600 hover:text-white rounded-lg transition-all text-xs flex items-center justify-center border border-white/[0.06] flex-shrink-0">
-                          <Trash2 size={12} />
-                        </button>
-                      </div>
-                    ))
-                  }
-                </div>
+                      : promoCodes.map(pc => (
+                        <div key={pc.id} className={`${card} flex items-center gap-4 p-4`}>
+                          <code className="bg-black/40 text-[#bbf028] font-mono font-bold text-sm px-3 py-1.5 rounded-lg border border-[#bbf028]/20 flex-shrink-0">
+                            {pc.code}
+                          </code>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/15 px-2 py-0.5 rounded-lg text-[10px] font-bold">-{pc.discountPercent}%</span>
+                              <span className="text-[10px] text-slate-600">{pc.currentUses}{pc.maxUses ? `/${pc.maxUses}` : ""} użyć</span>
+                              {pc.expiresAt && <span className="text-[10px] text-slate-600">Wygasa: {new Date(pc.expiresAt).toLocaleDateString("pl-PL")}</span>}
+                            </div>
+                          </div>
+                          <button onClick={async () => {
+                            const t = localStorage.getItem("auth_token")!;
+                            const r = await fetch(`/api/admin/kod-promo/${pc.id}/toggle`, { method: "PATCH", headers: { Authorization: `Bearer ${t}`, "X-API-Key": apiKey } });
+                            if (r.ok) fetchPromoCodes(apiKey, t);
+                          }} className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[10px] font-bold border transition-all flex-shrink-0 ${pc.active ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-red-500/10 hover:text-red-400 hover:border-red-500/20" : "bg-white/[0.03] text-slate-600 border-white/[0.06] hover:bg-emerald-500/10 hover:text-emerald-400"}`}>
+                            {pc.active ? <><ToggleRight size={12} /> ON</> : <><ToggleLeft size={12} /> OFF</>}
+                          </button>
+                          <button onClick={() => setConfirm({ open: true, message: `Usunąć kod ${pc.code}?`, onConfirm: async () => {
+                            const t = localStorage.getItem("auth_token")!;
+                            const r = await fetch(`/api/admin/kod-promo/${pc.id}`, { method: "DELETE", headers: { Authorization: `Bearer ${t}`, "X-API-Key": apiKey } });
+                            if (r.ok) { toast("Kod usuniety."); fetchPromoCodes(apiKey, t); }
+                          }})} className="w-8 h-8 bg-[#09090B] hover:bg-red-600 text-slate-600 hover:text-white rounded-lg transition-all text-xs flex items-center justify-center border border-white/[0.06] flex-shrink-0">
+                            <Trash2 size={12} />
+                          </button>
+                        </div>
+                      ))
+                    }
+                  </div>
+                </>)}
               </div>
             )}
 
