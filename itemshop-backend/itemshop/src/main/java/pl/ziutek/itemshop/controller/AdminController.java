@@ -220,6 +220,7 @@ public class AdminController {
     }
 
     @DeleteMapping("/produkt/{id}")
+    @Transactional
     public ResponseEntity<?> usunProdukt(@PathVariable Long id) {
         Optional<Product> prodOpt = productRepository.findById(id);
         if (prodOpt.isEmpty()) return ResponseEntity.notFound().build();
@@ -258,6 +259,7 @@ public class AdminController {
         });
     }
     @GetMapping("/zamowienia/export")
+    @Transactional(readOnly = true)
     public ResponseEntity<byte[]> exportOrdersCsv(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam
@@ -401,6 +403,7 @@ public class AdminController {
     }
 
     @DeleteMapping("/tryb/{id}")
+    @Transactional
     public ResponseEntity<?> deleteShopMode(@PathVariable Long id) {
         Optional<ShopMode> modeOpt = shopModeRepository.findById(id);
         if (modeOpt.isEmpty()) return ResponseEntity.notFound().build();
@@ -408,7 +411,10 @@ public class AdminController {
         if (!shop.getOwner().getEmail().equalsIgnoreCase(currentEmail())) {
             return ResponseEntity.status(403).build();
         }
+        String modeName = modeOpt.get().getName().trim().toLowerCase();
+        productRepository.deleteByShopAndMode(shop, modeName);
         shopModeRepository.delete(modeOpt.get());
+        evictShopProductCache(shop);
         evictShopModeCache(shop);
         return ResponseEntity.ok("Tryb usunięty");
     }

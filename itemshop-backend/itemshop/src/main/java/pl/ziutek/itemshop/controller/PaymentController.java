@@ -154,17 +154,22 @@ public class PaymentController {
             if ("FREE".equals(owner.getSubscriptionPlan())) {
                 return ResponseEntity.badRequest().body("Nie masz aktywnej subskrypcji.");
             }
+            // Brak Stripe subscription ID — bezpośredni downgrade (dev mode / ręcznie ustawiony plan)
             if (owner.getStripeSubscriptionId() == null) {
-                return ResponseEntity.badRequest().body("Brak ID subskrypcji — skontaktuj się z pomocą techniczną.");
+                owner.setSubscriptionPlan("FREE");
+                owner.setSubscriptionExpiresAt(null);
+                ownerRepository.save(owner);
+                log.info("[Payment] Bezpośredni downgrade do FREE (brak sub Stripe) dla: {}", email);
+                return ResponseEntity.ok(Map.of("message", "Subskrypcja anulowana."));
             }
             try {
-                // Anuluj na koniec bieżącego okresu (nie od razu) — użytkownik zachowuje PRO do końca
+                // Anuluj na koniec bieżącego okresu — użytkownik zachowuje plan do końca
                 Subscription sub = Subscription.retrieve(owner.getStripeSubscriptionId());
                 sub.update(SubscriptionUpdateParams.builder()
                         .setCancelAtPeriodEnd(true)
                         .build());
                 log.info("[Payment] Subskrypcja {} oznaczona do anulowania na koniec okresu. Konto: {}", owner.getStripeSubscriptionId(), email);
-                return ResponseEntity.ok(Map.of("message", "Subskrypcja zostanie anulowana po zakończeniu bieżącego okresu. Do tego czasu zachowujesz dostęp PRO."));
+                return ResponseEntity.ok(Map.of("message", "Subskrypcja zostanie anulowana po zakończeniu bieżącego okresu."));
             } catch (Exception e) {
                 log.error("[Payment] Błąd anulowania subskrypcji dla {}: {}", email, e.getMessage(), e);
                 return ResponseEntity.status(500).body("Nie udało się anulować subskrypcji. Spróbuj ponownie.");

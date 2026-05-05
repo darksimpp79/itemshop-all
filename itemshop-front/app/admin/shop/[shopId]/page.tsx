@@ -187,7 +187,7 @@ function DraggableProducts({ products, onReorder, onEdit, onDelete }: {
 }
 
 // ─── SHARED STYLES ────────────────────────────────────────────────────────────
-const inp  = "w-full px-4 py-3 rounded-xl bg-[#09090B] border border-white/[0.07] text-sm font-medium outline-none focus:border-blue-500/50 transition-all placeholder:text-slate-700";
+const inp  = "w-full px-4 py-3 rounded-xl bg-[#09090B] border border-white/[0.07] text-sm font-medium text-slate-100 outline-none focus:border-blue-500/50 transition-all placeholder:text-slate-700";
 const mono = "w-full px-4 py-3 rounded-xl bg-[#09090B] border border-white/[0.07] text-sm font-mono text-blue-300 outline-none focus:border-blue-500/50 transition-all placeholder:text-slate-700";
 const card = "bg-[#111116] border border-white/[0.06] rounded-2xl p-6";
 const btn  = "px-5 py-2.5 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] disabled:opacity-40 rounded-xl text-xs font-bold uppercase tracking-wide transition-all";
@@ -285,6 +285,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
   const [promoDiscount, setPromoDiscount] = useState("10");
   const [promoMaxUses, setPromoMaxUses] = useState("");
   const [promoExpiresAt, setPromoExpiresAt] = useState("");
+  const [promoAdding, setPromoAdding] = useState(false);
 
   // Orders
   const [orderSearch, setOrderSearch] = useState("");
@@ -423,7 +424,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
 
   const handleDeleteMode = (id: number) => setConfirm({ open: true, message: "Na pewno usunac tryb?", onConfirm: async () => {
     const r = await fetch(`/api/admin/tryb/${id}`, { method: "DELETE", headers: { Authorization: `Bearer ${token}` } });
-    if (r.ok) { fetchModes(apiKey, token!); toast("Tryb usuniety."); }
+    if (r.ok) { fetchModes(apiKey, token!); fetchProducts(apiKey, token!); toast("Tryb usuniety."); }
   }});
 
   const handleSaveIp = async () => {
@@ -511,7 +512,33 @@ function ShopPanel({ shopId }: { shopId: number }) {
   };
 
   const handleDownloadConfig = () => {
-    const cfg = `# ZiutekShop Config\nserver-name: "${shop?.serverName}"\napi-key: "${apiKey}"\napi-url: "https://api.pumpking.club/api"\ncheck-interval: 60\n\nallowed-command-prefixes:\n  - "give "\n  - "lp "\n  - "eco "\n\nmessages:\n  no-slots: "&cNie masz wolnych slotow!"\n  bought-success: "&aPomyslnie odebrano: &f{item}"\n  nothing-to-collect: "&cBrak przedmiotow do odebrania."`;
+    const modeNames = modes.map(m => m.name);
+    const modeComment = modeNames.length > 0
+      ? `# Dostepne tryby: ${modeNames.join(", ")}`
+      : "# Wpisz nazwe trybu gry z panelu (np. Survival, PvP)";
+    const firstMode = modeNames[0] || "Survival";
+    const cfg = [
+      "# ZiutekShop Config",
+      `server-name: "${shop?.serverName}"`,
+      modeComment,
+      `server-mode: "${firstMode}"`,
+      `api-key: "${apiKey}"`,
+      `api-url: "https://api.pumpking.club/api"`,
+      `check-interval: 60`,
+      `broadcast-purchases: true`,
+      `lootbox-cost: 500`,
+      ``,
+      `allowed-command-prefixes:`,
+      `  - "give "`,
+      `  - "lp "`,
+      `  - "eco "`,
+      ``,
+      `messages:`,
+      `  no-slots: "&cNie masz wolnych slotow!"`,
+      `  bought-success: "&aPomyslnie odebrano: &f{item}"`,
+      `  nothing-to-collect: "&cBrak przedmiotow do odebrania."`,
+      `  lootbox-no-points: "&cMasz za malo punktow! Skrzynka kosztuje 500 PKT."`,
+    ].join("\n");
     const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([cfg], {type:"text/yaml"})); a.download = "config.yml"; a.click();
     toast("Config.yml pobrany.");
   };
@@ -825,17 +852,23 @@ function ShopPanel({ shopId }: { shopId: number }) {
                   </div>
 
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                    <div className="md:col-span-2">
+                    <div className="md:col-span-3">
                       <input type="text" placeholder="Nazwa produktu" value={prodName} onChange={e => setProdName(e.target.value)} className={inp} />
                     </div>
                     <select value={prodMode} onChange={e => setProdMode(e.target.value)} className={`${inp} text-blue-400 font-semibold`}>
                       <option value="">Tryb gry...</option>
                       {modes.map(m => <option key={m.id} value={m.name}>{m.name}</option>)}
                     </select>
-                    <div className="flex gap-2">
-                      <input type="number" placeholder="Cena" value={prodPrice} onChange={e => setProdPrice(e.target.value)} className={`${inp} text-emerald-400 font-bold flex-1`} />
-                      <input type="text" placeholder="🎁" value={prodEmoji} onChange={e => setProdEmoji(e.target.value)} className={`${inp} w-14 text-center text-lg px-2`} />
+                    <div className="md:col-span-3 flex items-center gap-2">
+                      <input
+                        type="text" inputMode="decimal" placeholder="0.00"
+                        value={prodPrice}
+                        onChange={e => setProdPrice(e.target.value.replace(/[^0-9.]/g, ""))}
+                        className={`${inp} flex-1 text-emerald-400`}
+                      />
+                      <span className="text-[11px] font-bold text-slate-500 whitespace-nowrap">PLN</span>
                     </div>
+                    <input type="text" placeholder="🎁" value={prodEmoji} onChange={e => setProdEmoji(e.target.value)} className={`${inp} text-center text-lg`} />
                   </div>
                   <textarea placeholder="Krotki opis produktu..." value={prodDesc} onChange={e => setProdDesc(e.target.value)} className={`${inp} h-20 resize-none`} />
                   <div>
@@ -1042,23 +1075,29 @@ function ShopPanel({ shopId }: { shopId: number }) {
                         <input className={inp} type="datetime-local" value={promoExpiresAt} onChange={e => setPromoExpiresAt(e.target.value)} />
                       </div>
                     </div>
-                    <button className={`${btn} w-full`} onClick={async () => {
+                    <button className={`${btn} w-full`} disabled={promoAdding} onClick={async () => {
                       if (!promoCode.trim()) { toast("Wpisz kod.", "error"); return; }
                       const disc = parseInt(promoDiscount);
                       if (isNaN(disc) || disc < 1 || disc > 100) { toast("Zniżka musi być 1–100%.", "error"); return; }
+                      const t = localStorage.getItem("auth_token");
+                      if (!t) { toast("Brak sesji. Zaloguj sie ponownie.", "error"); return; }
+                      if (!apiKey) { toast("Blad: brak klucza API sklepu.", "error"); return; }
                       const body: Record<string, unknown> = { code: promoCode, discountPercent: disc };
                       if (promoMaxUses) body.maxUses = parseInt(promoMaxUses);
                       if (promoExpiresAt) body.expiresAt = promoExpiresAt;
-                      const t = localStorage.getItem("auth_token")!;
-                      const r = await fetch("/api/admin/kod-promo", {
-                        method: "POST",
-                        headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}`, "X-API-Key": apiKey },
-                        body: JSON.stringify(body)
-                      });
-                      if (r.ok) { toast("Kod dodany!"); setPromoCode(""); setPromoDiscount("10"); setPromoMaxUses(""); setPromoExpiresAt(""); fetchPromoCodes(apiKey, t); }
-                      else { toast(await r.text() || "Blad.", "error"); }
+                      setPromoAdding(true);
+                      try {
+                        const r = await fetch("/api/admin/kod-promo", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json", Authorization: `Bearer ${t}`, "X-API-Key": apiKey },
+                          body: JSON.stringify(body)
+                        });
+                        if (r.ok) { toast("Kod dodany!"); setPromoCode(""); setPromoDiscount("10"); setPromoMaxUses(""); setPromoExpiresAt(""); fetchPromoCodes(apiKey, t); }
+                        else { toast(await r.text() || "Blad.", "error"); }
+                      } catch { toast("Blad polaczenia.", "error"); }
+                      finally { setPromoAdding(false); }
                     }}>
-                      <Plus size={14} /> Dodaj kod
+                      <Plus size={14} /> {promoAdding ? "Dodawanie..." : "Dodaj kod"}
                     </button>
                   </div>
 

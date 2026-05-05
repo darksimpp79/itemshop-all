@@ -4,6 +4,12 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  input, textarea, select {
+    color: #f1f5f9;
+  }
+}
+
 
 /* app/globals.css */
 @keyframes marquee { from { transform: translateX(0) } to { transform: translateX(-50%) } }

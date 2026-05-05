@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  output: 'standalone',
+
   // Zezwolenie na Hot Reloading (odświeżanie na żywo) przez tunel Cloudflare
   allowedDevOrigins: process.env.NEXT_PUBLIC_ALLOWED_DEV_ORIGINS
     ? process.env.NEXT_PUBLIC_ALLOWED_DEV_ORIGINS.split(',').map(s => s.trim())

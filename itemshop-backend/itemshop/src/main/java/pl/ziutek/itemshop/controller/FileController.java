@@ -16,13 +16,15 @@ import java.util.*;
 public class FileController {
 
     private static final Logger log = LoggerFactory.getLogger(FileController.class);
-    private static final String UPLOAD_DIR = "uploads/products/";
     private static final List<String> ALLOWED_EXTENSIONS = List.of(
             ".jpg", ".jpeg", ".png", ".gif", ".webp"
     );
 
     @Value("${app.base-url:http://localhost:8080}")
     private String baseUrl;
+
+    @Value("${app.upload.dir:uploads/products/}")
+    private String uploadDir;
 
     @PostMapping("/upload")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
@@ -50,7 +52,7 @@ public class FileController {
         }
 
         try {
-            Path root = Paths.get(UPLOAD_DIR);
+            Path root = Paths.get(uploadDir);
             if (!Files.exists(root)) Files.createDirectories(root);
 
             String fileName = UUID.randomUUID().toString() + ext;

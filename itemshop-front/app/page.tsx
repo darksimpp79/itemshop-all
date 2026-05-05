@@ -239,7 +239,7 @@ export default function ZiutekShopLanding() {
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
                 </button>
               </Link>
-              <a href="http://alicjacraft.localhost:3000" target="_blank" rel="noreferrer">
+              <a href="https://demo.pumpking.club" target="_blank" rel="noreferrer">
                 <button className="px-10 py-5 rounded-2xl border border-white/10 font-black uppercase text-sm tracking-widest hover:bg-white/5 hover:border-white/20 transition-all group">
                   <span className="flex items-center gap-3">
                     <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />

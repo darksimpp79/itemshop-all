@@ -528,14 +528,15 @@ export default function AdminHub() {
   const cancelTwoFaSetup = () => { setTwoFaSetup("idle"); setTwoFaCode(""); setTotpQrUrl(""); setTotpManualCode(""); };
 
   const handleCancelSubscription = async () => {
-    if (!token) return;
+    const t = localStorage.getItem("auth_token");
+    if (!t) return;
     setCancelling(true);
     try {
       const r = await fetch("/api/payment/cancel-subscription", {
-        method: "POST", headers: { Authorization: `Bearer ${token}` },
+        method: "POST", headers: { Authorization: `Bearer ${t}` },
       });
       const msg = await r.text();
-      if (r.ok) { toast("Subskrypcja zostanie anulowana po wygasnieciu biezacego okresu."); setCancelConfirm(false); }
+      if (r.ok) { toast("Subskrypcja zostanie anulowana po wygasnieciu biezacego okresu."); setCancelConfirm(false); loadData(t); }
       else toast(msg || "Blad anulowania.", "error");
     } catch { toast("Blad polaczenia.", "error"); }
     finally { setCancelling(false); }
@@ -670,37 +671,61 @@ export default function AdminHub() {
             <div className="max-w-5xl space-y-6">
               {/* Shop grid */}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                {shops.map(shop => (
-                  <button
-                    key={shop.id}
-                    onClick={() => router.push(`/admin/shop/${shop.id}`)}
-                    className="group relative bg-[#111116] border border-white/[0.06] hover:border-blue-500/30 p-6 rounded-2xl text-left transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-blue-900/15 active:scale-[0.98]"
-                  >
-                    <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-blue-600/3 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
-
-                    <div className="flex items-start justify-between mb-5">
-                      <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/[0.07] flex items-center justify-center text-xl shadow-inner">
-                        🏰
+                {shops.map((shop, idx) => {
+                  const isLocked = shopLimit !== Infinity && idx >= shopLimit;
+                  return isLocked ? (
+                    <button
+                      key={shop.id}
+                      onClick={() => setTab("billing")}
+                      className="group relative bg-[#111116] border border-white/[0.04] p-6 rounded-2xl text-left transition-all cursor-pointer hover:border-amber-500/30"
+                    >
+                      {/* dimmed content */}
+                      <div className="opacity-25 pointer-events-none select-none">
+                        <div className="flex items-start justify-between mb-5">
+                          <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/[0.07] flex items-center justify-center text-xl shadow-inner">🏰</div>
+                        </div>
+                        <h3 className="font-bold text-[15px] text-slate-100 mb-1">{shop.serverName}</h3>
+                        <p className="text-[11px] text-slate-600 font-mono truncate">{shop.serverName.toLowerCase()}.pumpking.club</p>
                       </div>
-                      <div className="flex items-center gap-2">
-                        {shop.serverIp && <div className="w-2 h-2 bg-emerald-400 rounded-full shadow-[0_0_6px_rgba(52,211,153,0.6)]" />}
-                        {shop.theme && shop.theme !== "default" && (
-                          <span className="text-[8px] font-bold uppercase text-blue-400 bg-blue-500/10 border border-blue-500/15 px-1.5 py-0.5 rounded-md">PRO</span>
-                        )}
+                      {/* lock overlay */}
+                      <div className="absolute inset-0 rounded-2xl flex flex-col items-center justify-center gap-2">
+                        <span className="text-2xl">🔒</span>
+                        <p className="text-[11px] font-bold text-amber-400">Wymagany wyższy plan</p>
+                        <p className="text-[10px] text-slate-600">Kliknij aby zobaczyć plany</p>
                       </div>
-                    </div>
+                    </button>
+                  ) : (
+                    <button
+                      key={shop.id}
+                      onClick={() => router.push(`/admin/shop/${shop.id}`)}
+                      className="group relative bg-[#111116] border border-white/[0.06] hover:border-blue-500/30 p-6 rounded-2xl text-left transition-all hover:-translate-y-0.5 hover:shadow-xl hover:shadow-blue-900/15 active:scale-[0.98]"
+                    >
+                      <div className="absolute inset-0 rounded-2xl bg-gradient-to-br from-blue-600/3 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
 
-                    <h3 className="font-bold text-[15px] text-slate-100 mb-1">{shop.serverName}</h3>
-                    <p className="text-[11px] text-slate-600 font-mono truncate">
-                      {shop.customDomain || `${shop.serverName.toLowerCase()}.pumpking.club`}
-                    </p>
+                      <div className="flex items-start justify-between mb-5">
+                        <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-slate-800 to-slate-900 border border-white/[0.07] flex items-center justify-center text-xl shadow-inner">
+                          🏰
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {shop.serverIp && <div className="w-2 h-2 bg-emerald-400 rounded-full shadow-[0_0_6px_rgba(52,211,153,0.6)]" />}
+                          {shop.theme && shop.theme !== "default" && (
+                            <span className="text-[8px] font-bold uppercase text-blue-400 bg-blue-500/10 border border-blue-500/15 px-1.5 py-0.5 rounded-md">PRO</span>
+                          )}
+                        </div>
+                      </div>
 
-                    <div className="mt-5 pt-4 border-t border-white/[0.05] flex items-center justify-between">
-                      <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-widest">Panel</span>
-                      <span className="text-[10px] text-blue-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all">→</span>
-                    </div>
-                  </button>
-                ))}
+                      <h3 className="font-bold text-[15px] text-slate-100 mb-1">{shop.serverName}</h3>
+                      <p className="text-[11px] text-slate-600 font-mono truncate">
+                        {shop.customDomain || `${shop.serverName.toLowerCase()}.pumpking.club`}
+                      </p>
+
+                      <div className="mt-5 pt-4 border-t border-white/[0.05] flex items-center justify-between">
+                        <span className="text-[10px] font-semibold text-slate-600 uppercase tracking-widest">Panel</span>
+                        <span className="text-[10px] text-blue-500 group-hover:text-blue-400 group-hover:translate-x-0.5 transition-all">→</span>
+                      </div>
+                    </button>
+                  );
+                })}
 
                 {/* Create new shop */}
                 {canCreateShop && (

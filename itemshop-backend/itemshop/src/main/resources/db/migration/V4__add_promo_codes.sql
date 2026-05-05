@@ -1,4 +1,4 @@
-CREATE TABLE promo_codes (
+CREATE TABLE IF NOT EXISTS promo_codes (
     id          BIGSERIAL PRIMARY KEY,
     shop_id     BIGINT       NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
     code        VARCHAR(50)  NOT NULL,
@@ -11,4 +11,4 @@ CREATE TABLE promo_codes (
     UNIQUE(shop_id, code)
 );
 
-CREATE INDEX idx_promo_codes_shop_id ON promo_codes(shop_id);
+CREATE INDEX IF NOT EXISTS idx_promo_codes_shop_id ON promo_codes(shop_id);

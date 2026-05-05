@@ -1,7 +1,10 @@
 {
   "permissions": {
     "allow": [
-      "Bash(xargs grep *)"
+      "Bash(xargs grep *)",
+      "Bash(PGPASSWORD=admin psql -U postgres -d itemshop_db -c \"\\\\dt\")",
+      "Bash(PGPASSWORD=admin psql *)",
+      "Bash(npx tsc *)"
     ]
   }
 }
