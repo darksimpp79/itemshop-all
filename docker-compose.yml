@@ -36,7 +36,7 @@ services:
       DB_URL:    jdbc:postgresql://postgres:5432/itemshop_db
       UPLOAD_DIR: /uploads/products/
       # nginx ma fixed IP 172.28.0.2 — backend ufa mu jako trusted proxy
-      TRUSTED_PROXY_IPS: 172.28.0.2,127.0.0.1,::1
+      TRUSTED_PROXY_IPS: 172.28.0.100,127.0.0.1,::1
     volumes:
       - uploads:/uploads
     networks:
@@ -72,7 +72,7 @@ services:
       - uploads:/uploads:ro
     networks:
       internal:
-        ipv4_address: 172.28.0.2
+        ipv4_address: 172.28.0.100
     depends_on:
       - backend
       - frontend
