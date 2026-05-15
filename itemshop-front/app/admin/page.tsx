@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import QRCode from "qrcode";
 import { Server, UserCircle, CreditCard, LogOut, Gem, ShieldCheck, Mail, Smartphone, Menu, X } from "lucide-react";
 
@@ -174,7 +175,10 @@ function AuthScreen({ onLogin }: { onLogin: (token: string) => void }) {
       </div>
 
       {/* Right - Auth form */}
-      <div className="flex-1 flex items-center justify-center p-6">
+      <div className="flex-1 flex items-center justify-center p-6 relative">
+        <Link href="/" className="absolute top-6 left-6 flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-300 transition-colors font-medium">
+          <span>←</span> Strona główna
+        </Link>
         <div className="w-full max-w-[360px]">
           <div className="mb-8">
             <div className="lg:hidden w-10 h-10 mb-5 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center">

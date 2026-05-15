@@ -19,7 +19,17 @@ public class EmailService {
     @Value("${app.mail.from:ZiutekShop <noreply@twojadomena.pl>}")
     private String fromAddress;
 
+    private boolean isDevMode() {
+        return apiKey == null || apiKey.isBlank() || apiKey.startsWith("re_placeholder");
+    }
+
     public void sendAuthCode(String email, String code, String reason) {
+        if (isDevMode()) {
+            log.warn("[Email-DEV] Brak RESEND_API_KEY — kod NIE wysłany emailem.");
+            log.warn("[Email-DEV] Cel: {} | Akcja: {} | KOD: {}", email, reason, code);
+            return;
+        }
+
         Resend resend = new Resend(apiKey);
 
         String html = """
@@ -51,6 +61,11 @@ public class EmailService {
 
     public void sendPurchaseConfirmation(String email, String nick, String productName,
                                          String serverName, int pointsEarned, String promoCode) {
+        if (isDevMode()) {
+            log.warn("[Email-DEV] Pominięto potwierdzenie zakupu dla: {} (brak RESEND_API_KEY)", email);
+            return;
+        }
+
         Resend resend = new Resend(apiKey);
 
         String promoRow = (promoCode != null && !promoCode.isBlank())
