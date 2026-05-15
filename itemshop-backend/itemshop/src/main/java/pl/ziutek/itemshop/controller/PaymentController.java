@@ -80,6 +80,7 @@ public class PaymentController {
         try {
             SessionCreateParams.Builder builder = SessionCreateParams.builder()
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
+                    .addPaymentMethodType(SessionCreateParams.PaymentMethodType.PAYPAL)
                     .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
                     .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
                     .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
@@ -124,6 +125,7 @@ public class PaymentController {
         try {
             SessionCreateParams.Builder builder = SessionCreateParams.builder()
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
+                    .addPaymentMethodType(SessionCreateParams.PaymentMethodType.PAYPAL)
                     .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
                     .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
                     .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
