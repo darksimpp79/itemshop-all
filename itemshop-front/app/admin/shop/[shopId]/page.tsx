@@ -985,7 +985,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     <div className="text-4xl">⚡</div>
                     <div>
                       <h2 className="text-base font-black text-slate-200 mb-1">Lootbox — plan STARTER+</h2>
-                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Losowe nagrody dla graczy za 500 punktów portfela. Dostępne od planu STARTER (9,99 PLN/mies.).</p>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Losowe nagrody dla graczy za 500 punktów portfela. Dostępne od planu STARTER (19,99 PLN/mies.).</p>
                     </div>
                     <button onClick={startStarterCheckout} className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 active:scale-[0.98] rounded-xl text-xs font-bold uppercase tracking-wide transition-all text-white mx-auto block">
                       ⚡ Ulepsz do STARTER
@@ -1045,7 +1045,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     <div className="text-4xl">⚡</div>
                     <div>
                       <h2 className="text-base font-black text-slate-200 mb-1">Kody promocyjne — plan STARTER+</h2>
-                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Utwórz kody zniżkowe dla swoich graczy. Dostępne od planu STARTER (9,99 PLN/mies.).</p>
+                      <p className="text-xs text-slate-500 max-w-sm mx-auto">Utwórz kody zniżkowe dla swoich graczy. Dostępne od planu STARTER (19,99 PLN/mies.).</p>
                     </div>
                     <button onClick={startStarterCheckout} className="px-6 py-2.5 bg-violet-600 hover:bg-violet-500 active:scale-[0.98] rounded-xl text-xs font-bold uppercase tracking-wide transition-all text-white mx-auto block">
                       ⚡ Ulepsz do STARTER
@@ -1305,7 +1305,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     onClick={() => plan === "FREE" && startStarterCheckout()}>
                     {plan === "FREE" && <div className="absolute top-0 right-0 bg-violet-600 text-[7px] font-black px-2.5 py-1.5 rounded-bl-xl uppercase tracking-wider">Popularny</div>}
                     <p className="text-[10px] text-violet-400/60 font-bold uppercase tracking-widest mb-1">Starter</p>
-                    <h3 className="text-xl font-black text-violet-400 mb-1">9,99 PLN</h3>
+                    <h3 className="text-xl font-black text-violet-400 mb-1">19,99 PLN</h3>
                     <p className="text-[10px] text-slate-600 mb-5">/ miesiac</p>
                     <ul className="space-y-2 text-xs text-violet-200/60 mb-6">
                       {["1 sklep","5 trybow gry","Motywy dark/forest/ocean","Edytor regulaminu"].map(f => (
@@ -1332,7 +1332,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     onClick={() => !isPro && startProCheckout()}>
                     {!isPro && <div className="absolute top-0 right-0 bg-blue-600 text-[7px] font-black px-2.5 py-1.5 rounded-bl-xl uppercase tracking-wider">Pelny dostep</div>}
                     <p className="text-[10px] text-blue-500/50 font-bold uppercase tracking-widest mb-1">Pro</p>
-                    <h3 className="text-xl font-black text-blue-400 mb-1">29,99 PLN</h3>
+                    <h3 className="text-xl font-black text-blue-400 mb-1">49,99 PLN</h3>
                     <p className="text-[10px] text-slate-600 mb-5">/ miesiac</p>
                     <ul className="space-y-2 text-xs text-blue-200/60 mb-6">
                       {["Nielimitowane sklepy","Nielimitowane tryby","Wszystkie motywy","Wlasna domena","Priorytetowy support"].map(f => (
@@ -1343,7 +1343,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     </ul>
                     {isPro
                       ? <div className="py-2 rounded-xl border border-blue-500/20 bg-blue-500/5 text-center text-[10px] font-bold uppercase text-blue-400">💎 Aktywny</div>
-                      : <div className="py-2 rounded-xl bg-blue-600 hover:bg-blue-500 transition-all text-center text-[10px] font-bold uppercase text-white">29,99 PLN →</div>
+                      : <div className="py-2 rounded-xl bg-blue-600 hover:bg-blue-500 transition-all text-center text-[10px] font-bold uppercase text-white">49,99 PLN →</div>
                     }
                   </div>
                 </div>

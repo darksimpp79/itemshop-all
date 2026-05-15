@@ -779,7 +779,7 @@ export default function AdminHub() {
                     onClick={startProCheckout}
                     className="flex-shrink-0 px-6 py-3 bg-blue-600 hover:bg-blue-500 active:scale-[0.98] rounded-xl text-sm font-bold transition-all shadow-lg shadow-blue-700/25 whitespace-nowrap"
                   >
-                    29,99 PLN / mies. →
+                    49,99 PLN / mies. →
                   </button>
                 </div>
               )}
