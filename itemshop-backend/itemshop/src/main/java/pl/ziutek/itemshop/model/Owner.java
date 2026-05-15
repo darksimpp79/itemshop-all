@@ -69,4 +69,12 @@ public class Owner {
     /** "EMAIL" (default) or "TOTP". */
     @Column(name = "two_factor_method", length = 16, nullable = false)
     private String twoFactorMethod = "EMAIL";
+
+    /** Stripe Connect Express account ID (acct_...). Null = nie podłączony. */
+    @Column(name = "stripe_connect_account_id", length = 64)
+    private String stripeConnectAccountId;
+
+    /** Czy Stripe Connect onboarding został ukończony (charges_enabled). */
+    @Column(name = "stripe_connect_enabled", nullable = false)
+    private boolean stripeConnectEnabled = false;
 }

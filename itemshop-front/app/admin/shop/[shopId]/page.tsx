@@ -287,6 +287,11 @@ function ShopPanel({ shopId }: { shopId: number }) {
   const [promoExpiresAt, setPromoExpiresAt] = useState("");
   const [promoAdding, setPromoAdding] = useState(false);
 
+  // Stripe Connect
+  const [stripeConnected, setStripeConnected] = useState(false);
+  const [stripeChargesEnabled, setStripeChargesEnabled] = useState(false);
+  const [stripeConnecting, setStripeConnecting] = useState(false);
+
   // Orders
   const [orderSearch, setOrderSearch] = useState("");
   const [orderFilter, setOrderFilter] = useState<"all"|"claimed"|"pending">("all");
@@ -344,6 +349,7 @@ function ShopPanel({ shopId }: { shopId: number }) {
         fetchChart(key, t),
         fetchLootbox(key, t),
         fetchPromoCodes(key, t),
+        fetchStripeStatus(t),
       ]);
     } finally { setLoadingData(false); }
   };
@@ -377,6 +383,31 @@ function ShopPanel({ shopId }: { shopId: number }) {
   const fetchPromoCodes = async (key: string, t: string) => {
     const r = await fetch("/api/admin/kody-promo", { headers: { Authorization: `Bearer ${t}`, "X-API-Key": key } });
     if (r.ok) setPromoCodes(await r.json());
+  };
+
+  const fetchStripeStatus = async (t: string) => {
+    const r = await fetch("/api/admin/stripe/connect/status", { headers: { Authorization: `Bearer ${t}` } });
+    if (r.ok) { const d = await r.json(); setStripeConnected(!!d.connected); setStripeChargesEnabled(!!d.chargesEnabled); }
+  };
+
+  const handleStripeConnect = async () => {
+    const t = localStorage.getItem("auth_token");
+    if (!t) return;
+    setStripeConnecting(true);
+    try {
+      const r = await fetch(`/api/admin/stripe/connect/start?shopId=${shopId}`, { method: "POST", headers: { Authorization: `Bearer ${t}` } });
+      if (r.ok) { const d = await r.json(); window.location.href = d.url; }
+      else { const msg = await r.text(); toast(msg || "Blad polaczenia ze Stripe.", "error"); }
+    } catch { toast("Blad polaczenia.", "error"); }
+    finally { setStripeConnecting(false); }
+  };
+
+  const handleStripeDisconnect = async () => {
+    const t = localStorage.getItem("auth_token");
+    if (!t) return;
+    const r = await fetch("/api/admin/stripe/connect", { method: "DELETE", headers: { Authorization: `Bearer ${t}` } });
+    if (r.ok) { setStripeConnected(false); setStripeChargesEnabled(false); toast("Konto Stripe odlaczone."); }
+    else toast("Blad odlaczania.", "error");
   };
 
   const uploadImage = async (file: File, setUrl: (u:string)=>void, setLoading: (b:boolean)=>void) => {
@@ -1225,6 +1256,48 @@ function ShopPanel({ shopId }: { shopId: number }) {
                     className={`${inp} w-full font-mono text-xs leading-relaxed resize-y min-h-[200px]`}
                   />
                   <button onClick={handleSaveShopSettings} className={`w-full ${btn}`}>Zapisz regulamin</button>
+                </div>
+
+                {/* Stripe Connect */}
+                <div className={`${card} space-y-4`}>
+                  <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Platnosci Stripe — Twoje konto</p>
+                    <span className={`text-[10px] px-2.5 py-1 rounded-lg font-bold border ${stripeChargesEnabled ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20" : stripeConnected ? "bg-yellow-500/10 text-yellow-400 border-yellow-500/20" : "bg-white/[0.03] text-slate-500 border-white/[0.06]"}`}>
+                      {stripeChargesEnabled ? "Aktywne" : stripeConnected ? "Onboarding" : "Niepodlaczone"}
+                    </span>
+                  </div>
+                  {stripeChargesEnabled ? (
+                    <div className="bg-emerald-500/5 border border-emerald-500/10 rounded-xl p-4 space-y-1">
+                      <p className="text-xs text-emerald-400 font-semibold">Platnosci trafiaja bezposrednio na Twoje konto Stripe.</p>
+                      <p className="text-[10px] text-slate-600">Platforma pobiera 5% prowizji od kazdej transakcji.</p>
+                    </div>
+                  ) : stripeConnected ? (
+                    <div className="bg-yellow-500/5 border border-yellow-500/10 rounded-xl p-4">
+                      <p className="text-xs text-yellow-400 font-semibold">Konto podlaczone — dokoncz onboarding w Stripe aby aktywowac platnosci.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-white/[0.02] border border-white/[0.06] rounded-xl p-4 space-y-1">
+                      <p className="text-xs text-slate-400 font-semibold">Podlacz swoje konto Stripe</p>
+                      <p className="text-[10px] text-slate-600 leading-relaxed">Platnosci od graczy trafia bezposrednio do Ciebie. Platforma pobiera tylko 5% prowizji. Bez opodatkowania na posrednika.</p>
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={handleStripeConnect}
+                      disabled={stripeConnecting}
+                      className={`${btn} disabled:opacity-50`}
+                    >
+                      {stripeConnecting ? "Przekierowanie..." : stripeConnected ? "Ponow onboarding" : "Podlacz Stripe"}
+                    </button>
+                    {stripeConnected && (
+                      <button
+                        onClick={() => setConfirm({ open: true, message: "Odlaczyc konto Stripe? Platnosci graczy przestana trafiaca na Twoje konto.", onConfirm: handleStripeDisconnect })}
+                        className={btnG}
+                      >
+                        Odlacz
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

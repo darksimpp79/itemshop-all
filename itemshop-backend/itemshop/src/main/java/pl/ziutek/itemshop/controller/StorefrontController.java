@@ -10,10 +10,12 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.CacheControl;
 import org.springframework.web.bind.annotation.*;
 import pl.ziutek.itemshop.model.DailyReward;
+import pl.ziutek.itemshop.model.Owner;
 import pl.ziutek.itemshop.model.PendingItem;
 import pl.ziutek.itemshop.model.Product;
 import pl.ziutek.itemshop.model.Shop;
 import pl.ziutek.itemshop.repository.DailyRewardRepository;
+import pl.ziutek.itemshop.repository.OwnerRepository;
 import pl.ziutek.itemshop.repository.PendingItemRepository;
 import pl.ziutek.itemshop.repository.ProductRepository;
 import pl.ziutek.itemshop.repository.ShopRepository;
@@ -47,6 +49,7 @@ public class StorefrontController {
     @Autowired private pl.ziutek.itemshop.repository.LootboxRewardRepository lootboxRewardRepository;
     @Autowired private pl.ziutek.itemshop.repository.PromoCodeRepository promoCodeRepository;
     @Autowired private StorefrontService storefrontService;
+    @Autowired private OwnerRepository ownerRepository;
 
     @Value("${stripe.api.key}")
     private String stripeApiKey;
@@ -203,6 +206,11 @@ public class StorefrontController {
             cancelUrl    = base + "/" + theme + "/shop/" + effectiveMode + "?" + qs + "cancel";
         }
 
+        // Sprawdź czy właściciel sklepu ma podłączony Stripe Connect
+        Owner shopOwner = ownerRepository.findById(shop.getOwner().getId()).orElse(null);
+        String connectedAccountId = (shopOwner != null && shopOwner.isStripeConnectEnabled())
+                ? shopOwner.getStripeConnectAccountId() : null;
+
         try {
             SessionCreateParams.Builder sessionBuilder = SessionCreateParams.builder()
                     .addPaymentMethodType(SessionCreateParams.PaymentMethodType.CARD)
@@ -216,6 +224,21 @@ public class StorefrontController {
                     .putMetadata("nick", nick.trim())
                     .putMetadata("mode", effectiveMode);
             if (appliedPromo != null) sessionBuilder.putMetadata("promoCode", appliedPromo);
+
+            // Stripe Connect: destination charge — 5% opłata platformy, reszta trafia do właściciela
+            if (connectedAccountId != null) {
+                long feeAmount = Math.max(1L, Math.round(amount * 0.05));
+                sessionBuilder.setPaymentIntentData(
+                        SessionCreateParams.PaymentIntentData.builder()
+                                .setApplicationFeeAmount(feeAmount)
+                                .setTransferData(
+                                        SessionCreateParams.PaymentIntentData.TransferData.builder()
+                                                .setDestination(connectedAccountId)
+                                                .build())
+                                .build());
+                log.debug("[Checkout] Destination charge → {} (fee: {} gr)", connectedAccountId, feeAmount);
+            }
+
             SessionCreateParams params = sessionBuilder
                     .addLineItem(SessionCreateParams.LineItem.builder()
                             .setQuantity(1L)
