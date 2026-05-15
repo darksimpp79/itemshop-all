@@ -63,6 +63,7 @@ export default function RpgTheme({ serverName }: RpgThemeProps) {
           <div className="flex items-center gap-8" style={{ fontSize: "0.7rem", letterSpacing: "0.15em", textTransform: "uppercase" }}>
             <a href="#kategorie" style={{ color: "rgba(212,160,23,0.6)" }} className="hover:text-amber-400 transition-colors">Zbrojownia</a>
             <Link href="/regulamin" style={{ color: "rgba(212,160,23,0.4)" }} className="hover:text-amber-400 transition-colors">Regulamin</Link>
+            <Link href="/themes" style={{ color: "rgba(212,160,23,0.4)" }} className="hover:text-amber-400 transition-colors">Motywy</Link>
             <Link href="/docs" style={{ color: "rgba(212,160,23,0.4)" }} className="hover:text-amber-400 transition-colors">Pomoc</Link>
             <div className="flex items-center gap-2 px-4 py-2 rounded-lg rpg-border" style={{ background: "rgba(212,160,23,0.04)", fontSize: "0.65rem" }}>
               <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse inline-block" />

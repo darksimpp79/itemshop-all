@@ -239,14 +239,14 @@ export default function ZiutekShopLanding() {
                   <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full group-hover:translate-x-full transition-transform duration-500" />
                 </button>
               </Link>
-              <a href="https://demo.pumpking.club" target="_blank" rel="noreferrer">
+              <Link href="/demo">
                 <button className="px-10 py-5 rounded-2xl border border-white/10 font-black uppercase text-sm tracking-widest hover:bg-white/5 hover:border-white/20 transition-all group">
                   <span className="flex items-center gap-3">
                     <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
                     Demo na żywo
                   </span>
                 </button>
-              </a>
+              </Link>
             </div>
 
             {/* Social proof */}
@@ -553,7 +553,7 @@ export default function ZiutekShopLanding() {
               <div className="space-y-3">
                 <Link href="/admin"><p className="text-gray-500 hover:text-white text-sm font-medium cursor-pointer transition-colors">Panel Admina</p></Link>
                 <a href="#cennik"><p className="text-gray-500 hover:text-white text-sm font-medium cursor-pointer transition-colors">Cennik</p></a>
-                <Link href="/admin"><p className="text-gray-500 hover:text-white text-sm font-medium cursor-pointer transition-colors">Demo</p></Link>
+                <Link href="/demo"><p className="text-gray-500 hover:text-white text-sm font-medium cursor-pointer transition-colors">Demo</p></Link>
                 <Link href="/polityka"><p className="text-gray-500 hover:text-white text-sm font-medium cursor-pointer transition-colors">Dokumentacja</p></Link>
               </div>
             </div>

@@ -95,6 +95,7 @@ export default function RetroTheme({ serverName }: RetroThemeProps) {
           <div className="flex items-center gap-6 text-[10px] uppercase tracking-widest text-[#00ff41]/40">
             <a href="#kategorie" className="rt-btn hover:text-[#00ff41] transition-colors">[SHOP]</a>
             <Link href="/regulamin" className="rt-btn hover:text-[#00ff41] transition-colors">[REGULAMIN]</Link>
+            <Link href="/themes" className="rt-btn hover:text-[#00ff41] transition-colors">[MOTYWY]</Link>
             <Link href="/docs" className="rt-btn hover:text-[#00ff41] transition-colors">[POMOC]</Link>
             <div className="flex items-center gap-2">
               <span className="w-1.5 h-1.5 bg-[#00ff41] rounded-full animate-pulse rt-glow" />

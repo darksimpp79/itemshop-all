@@ -21,14 +21,17 @@ const nextConfig = {
     // Ensure backend URL doesn't have trailing /api
     const baseUrl = backendUrl.replace(/\/api\/?$/, '');
     
-    return [
-      {
-        // Wszystko, co idzie na /api/... w Next.js
-        source: '/api/:path*',
-        // Leci do backendu ze zmiennych środowiskowych (reverse proxy w produkcji)
-        destination: `${baseUrl}/api/:path*`,
-      },
-    ];
+    // afterFiles: Next.js sprawdza najpierw własne Route Handlers (app/api/*),
+    // a dopiero potem przekierowuje resztę do backendu.
+    // Dzięki temu app/api/storefront/demo/* obsługuje mock demo bez backendu.
+    return {
+      afterFiles: [
+        {
+          source: '/api/:path*',
+          destination: `${baseUrl}/api/:path*`,
+        },
+      ],
+    };
   },
 };
 

@@ -99,6 +99,7 @@ export default function DefaultTheme({ serverName }: DefaultThemeProps) {
               <Link href="/" className="text-[#bbf028]">Strona główna</Link>
               <Link href="/regulamin" className="hover:text-white transition-colors">Regulamin</Link>
               <Link href="/bonus" className="hover:text-white transition-colors">Darmowy Bonus</Link>
+              <Link href="/themes" className="hover:text-[#bbf028] transition-colors">Motywy</Link>
               <Link href="/docs" className="hover:text-white transition-colors">Pomoc</Link>
             </div>
           </div>

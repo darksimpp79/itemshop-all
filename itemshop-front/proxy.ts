@@ -33,6 +33,28 @@ export async function proxy(request: NextRequest) {
   const reservedNames = ['www', 'admin', 'api', 'panel'];
 
   if (serverName && !reservedNames.includes(serverName.toLowerCase())) {
+    // ── DEMO: nie odpytuj backendu, użyj mock API Route Handlers ──────────────
+    if (serverName.toLowerCase() === 'demo') {
+      if (url.pathname === '/') {
+        const u = new URL('/default', request.url);
+        u.searchParams.set('serverName', 'demo');
+        return NextResponse.rewrite(u);
+      }
+      if (url.pathname.startsWith('/shop/')) {
+        const mode = url.pathname.split('/')[2] || 'survival';
+        const u = new URL(`/default/shop/${mode}`, request.url);
+        u.searchParams.set('serverName', 'demo');
+        return NextResponse.rewrite(u);
+      }
+      if (url.pathname === '/themes') {
+        const u = new URL('/themes', request.url);
+        u.searchParams.set('serverName', 'demo');
+        return NextResponse.rewrite(u);
+      }
+      return NextResponse.next();
+    }
+    // ─────────────────────────────────────────────────────────────────────────
+
     console.log(`[Proxy] Próba identyfikacji: ${serverName} -> ${backendBaseUrl}/api/storefront/${serverName}/info`);
 
     try {
@@ -66,6 +88,12 @@ export async function proxy(request: NextRequest) {
           const parts = url.pathname.split('/');
           const mode = parts[2] || 'survival'; // fallback na survival
           const rewriteUrl = new URL(`/${theme}/shop/${mode}`, request.url);
+          rewriteUrl.searchParams.set('serverName', serverName);
+          return NextResponse.rewrite(rewriteUrl);
+        }
+
+        if (url.pathname === '/themes') {
+          const rewriteUrl = new URL('/themes', request.url);
           rewriteUrl.searchParams.set('serverName', serverName);
           return NextResponse.rewrite(rewriteUrl);
         }
