@@ -84,7 +84,6 @@ public class PaymentController {
                     .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
                     .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
                     .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
-                    .setCustomerEmail(email)
                     .putMetadata("ownerEmail", email)
                     .putMetadata("type", "subscription_pro")
                     .addLineItem(SessionCreateParams.LineItem.builder()
@@ -92,9 +91,10 @@ public class PaymentController {
                             .setPrice(stripePriceProMonthly)
                             .build());
 
-            // Podpinamy istniejącego Stripe Customer jeśli mamy ID
             if (owner.getStripeCustomerId() != null) {
                 builder.setCustomer(owner.getStripeCustomerId());
+            } else {
+                builder.setCustomerEmail(email);
             }
 
             Session session = Session.create(builder.build());
@@ -129,7 +129,6 @@ public class PaymentController {
                     .setMode(SessionCreateParams.Mode.SUBSCRIPTION)
                     .setSuccessUrl(frontendBaseUrl + "/admin?payment=success")
                     .setCancelUrl(frontendBaseUrl + "/admin?payment=cancel")
-                    .setCustomerEmail(email)
                     .putMetadata("ownerEmail", email)
                     .putMetadata("type", "subscription_starter")
                     .addLineItem(SessionCreateParams.LineItem.builder()
@@ -137,6 +136,7 @@ public class PaymentController {
                             .setPrice(stripePriceStarterMonthly)
                             .build());
             if (owner.getStripeCustomerId() != null) builder.setCustomer(owner.getStripeCustomerId());
+            else builder.setCustomerEmail(email);
             Session session = Session.create(builder.build());
             return ResponseEntity.ok(Map.of("url", session.getUrl()));
         } catch (Exception e) {
