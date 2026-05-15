@@ -6,6 +6,10 @@ COPY package*.json ./
 RUN npm ci --prefer-offline
 
 COPY . .
+
+ARG ITEMSHOP_BACKEND_URL=http://backend:8080
+ENV ITEMSHOP_BACKEND_URL=${ITEMSHOP_BACKEND_URL}
+
 RUN npm run build
 
 # ── Stage 2: Runtime (tylko standalone output, zero node_modules devowych) ──

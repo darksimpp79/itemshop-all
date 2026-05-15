@@ -53,6 +53,8 @@ services:
     build:
       context: ./itemshop-front
       dockerfile: Dockerfile
+      args:
+        ITEMSHOP_BACKEND_URL: http://backend:8080
     environment:
       NODE_ENV:              production
       ITEMSHOP_BACKEND_URL:  http://backend:8080
