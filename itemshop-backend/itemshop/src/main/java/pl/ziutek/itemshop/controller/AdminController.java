@@ -164,6 +164,7 @@ public class AdminController {
     // ══ PRODUKTY ══
 
     @PostMapping("/produkt")
+    @Transactional
     public ResponseEntity<?> dodajProdukt(@RequestHeader("X-API-Key") String apiKey, @RequestBody Product product) {
         return withOwnedShop(apiKey, shop -> {
             String prodPlan = shop.getOwner().getSubscriptionPlan();
@@ -495,7 +496,7 @@ public class AdminController {
 
     private String resolveApiKey(String header, String param) {
         if (header != null && !header.isBlank()) return header;
-        if (param != null && !param.isBlank()) return param;
+        // param fallback celowo usunięty — apiKey nie powinien lecieć w URL (logi, historia przeglądarki)
         return null;
     }
 
@@ -530,6 +531,7 @@ public class AdminController {
     }
 
     @PostMapping("/lootbox")
+    @Transactional
     public ResponseEntity<?> addLootboxReward(
             @RequestHeader(value = "X-API-Key", required = false) String apiKeyHeader,
             @RequestParam(value = "apiKey", required = false) String apiKeyParam,
